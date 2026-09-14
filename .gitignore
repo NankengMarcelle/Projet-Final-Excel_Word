@@ -1,0 +1,20 @@
+# Secrets — never commit real values (see .env.example for the template)
+.env
+
+# Virtual environment
+venv/
+
+# Uploaded workbooks / generated Word docs — user data, not source
+storage/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Personal Claude Code permission allowlist — machine/session-specific, not project config
+.claude/settings.local.json
