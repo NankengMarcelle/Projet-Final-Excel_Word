@@ -6,13 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SheetFlow is a two-project web app for importing Excel workbooks, editing them in-browser, deriving
 filtered "child" sheets from "parent" sheets, manually re-syncing them, and converting worksheets to
-Word documents. The two halves are sibling directories, not a monorepo with shared tooling:
+Word documents.
 
-- `sheet_Flow_backend/` (this directory) — FastAPI + PostgreSQL API
-- `../sheet_Flow_frontend/` — React + TypeScript + Vite SPA, consumes the backend over HTTP
-
-Neither directory is a git repository yet. There's no root-level build; each project is set up and run
-independently as described below.
+**Repo layout**: this directory (`backend/`) lives inside a shared monorepo (`Projet-Excel_Word`, on
+the `Project_API` branch) alongside `../frontend/` — a separately-built React/JS UI (originally its own
+prototype, now the real frontend being wired up to this API) — plus a few unrelated top-level files
+(`SheetTools.xlam`, `antic.png`, some standalone Python scripts) that predate the backend joining the
+repo. There's still no root-level build; each project is set up and run independently as described
+below. `render.yaml` for deployment lives at the **repo root** (required for Render's Blueprint
+auto-detection) with `rootDir: backend` and a `buildFilter: [backend/**]` so it builds/runs from here
+and only redeploys on backend changes — see "Deploying" below.
 
 ## Backend (`sheet_Flow_backend/`)
 
@@ -57,6 +60,36 @@ alembic revision --autogenerate -m "description"
 alembic upgrade head
 alembic downgrade -1   # roll back one
 ```
+
+### Deploying (Render) and joining this repo's monorepo
+
+Backend-only deploy to Render, so the frontend can be tested against a real live API instead of
+localhost. `render.yaml` (repo root) provisions both the web service and a managed Postgres from one
+Blueprint — connect the repo on Render, pick the `Project_API` branch, and it auto-detects the file.
+
+Getting the backend into this repo (it started as its own standalone `git init`, unrelated history to
+the frontend's) surfaced two real near-misses worth remembering, both the same root cause:
+**`.gitignore` only covers paths *relative to the directory it's in* — moving the `.gitignore` file
+without moving what it's supposed to ignore silently stops ignoring those paths.**
+
+- Restructuring the backend to live under `backend/` (to match the repo's existing `frontend/`
+  convention) meant moving `.gitignore` from the backend's own root into `backend/.gitignore`. `.env`
+  and `storage/` (real uploaded workbook files, including another user's actual data from local
+  testing) were still sitting at the *old* root path when this happened — no longer covered by any
+  `.gitignore`, since the one that used to cover them had just moved. `git add -A` staged both before
+  this was caught in a review pass. Fixed by physically moving `.env`, `storage/`, and `venv/` into
+  `backend/` too (which also matches where the app actually runs from now), not just editing ignore
+  patterns.
+- Same failure mode hit `.claude/settings.local.json` (a personal, machine-specific Claude Code
+  permission allowlist, never meant to be committed) — except Claude Code itself kept re-writing that
+  file at the session's *original* working directory on every tool call, regardless of the restructure,
+  so moving it once didn't stick. Fixed with a narrow root-level `.gitignore` entry
+  (`/.claude/settings.local.json`) instead of relying on a physical move.
+
+**The practical rule that came out of this**: after any commit that moves a `.gitignore` file itself
+(not just the files around it), re-verify with a fresh `git status` — or better, an explicit
+`git status --short | grep -iE ".env$|storage/|venv/|settings.local"` — before committing, rather than
+trusting that `git add -A` respecting ignore rules once still means it respects them after a restructure.
 
 ### Architecture
 
