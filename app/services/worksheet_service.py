@@ -10,6 +10,7 @@ from app.models.worksheet import Worksheet
 from app.repositories import worksheet_repository
 from app.schemas.worksheet import CellData, WorksheetData
 from app.spreadsheet import cell_editor, excel_io
+from app.spreadsheet.cell_signal import cell_has_signal, color_to_hex
 
 
 def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: uuid.UUID) -> Worksheet:
@@ -17,39 +18,6 @@ def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: u
     if worksheet is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worksheet not found")
     return worksheet
-
-
-def _color_to_hex(color) -> str | None:
-    rgb = getattr(color, "rgb", None)
-    return rgb if isinstance(rgb, str) else None
-
-
-def _cell_has_signal(cell) -> bool:
-    """True if this cell carries anything worth sending — a value/formula, or formatting
-    that actually differs from an untouched cell's defaults. Plenty of real-world workbooks
-    apply borders/number formats across a whole grid while only a fraction of cells hold
-    data (the ANTIC test file is a good example) — serializing a full CellData for every one
-    of those otherwise-blank cells was pure waste, and at scale (hundreds of thousands of
-    cells across many sheets) that waste is the difference between a multi-MB and a
-    multi-hundred-KB response."""
-    if cell.value is not None:
-        return True
-    font = cell.font
-    if font and (font.bold or font.italic or _color_to_hex(font.color)):
-        return True
-    if cell.fill and cell.fill.fill_type == "solid" and _color_to_hex(cell.fill.fgColor):
-        return True
-    alignment = cell.alignment
-    if alignment and (alignment.horizontal or alignment.vertical):
-        return True
-    if cell.number_format and cell.number_format != "General":
-        return True
-    border = cell.border
-    if border and any(
-        side and side.style for side in (border.top, border.bottom, border.left, border.right)
-    ):
-        return True
-    return False
 
 
 def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> WorksheetData:
@@ -68,7 +36,7 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
     cells: list[CellData] = []
     for row in ws_formulas.iter_rows(min_row=1, max_row=ws_formulas.max_row, max_col=ws_formulas.max_column):
         for cell in row:
-            if not _cell_has_signal(cell):
+            if not cell_has_signal(cell):
                 continue
             is_formula = cell.data_type == "f"
             calculated_value = (
@@ -85,14 +53,14 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
                     number_format=cell.number_format,
                     bold=bool(cell.font.bold),
                     italic=bool(cell.font.italic),
-                    font_color=_color_to_hex(cell.font.color),
+                    font_color=color_to_hex(cell.font.color),
                     # Only "solid" actually paints fgColor as a flat background in Excel's own
                     # rendering. Any other fill_type Excel and openpyxl left non-None — most
                     # commonly "gray125", the legacy default marker OOXML silently writes onto
                     # a cell that was merely touched by formatting (e.g. borders) without an
                     # explicit fill — would otherwise get its (often grey/black) fgColor painted
                     # as a real background here, which is not what the workbook shows on screen.
-                    fill_color=_color_to_hex(cell.fill.fgColor)
+                    fill_color=color_to_hex(cell.fill.fgColor)
                     if cell.fill and cell.fill.fill_type == "solid"
                     else None,
                     horizontal_alignment=cell.alignment.horizontal,

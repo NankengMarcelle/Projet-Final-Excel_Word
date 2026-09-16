@@ -41,5 +41,10 @@ def edit_worksheet(
     worksheet = worksheet_service.get_worksheet_or_404(
         db, workbook_id=workbook_id, worksheet_id=worksheet_id
     )
-    edits = [edit.model_dump() for edit in payload.edits]
+    # exclude_unset=True is what makes CellEdit's style fields PATCH-semantic: a field the
+    # client's JSON never mentioned is left out of the dict entirely (not present == "leave
+    # alone"), vs. a field explicitly sent as null/false ("value" being null to clear a cell,
+    # or "bold": false to un-bold it), which stays in the dict. apply_cell_edits relies on this
+    # distinction via `"field" in edit` checks.
+    edits = [edit.model_dump(exclude_unset=True) for edit in payload.edits]
     return worksheet_service.apply_edits(db, workbook=workbook, worksheet=worksheet, edits=edits)

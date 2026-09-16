@@ -114,9 +114,44 @@ actual `.xlsx`/`.docx` files live under `storage/workbooks/{user_id}/{workbook_i
 `storage/conversions/{conversion_id}.docx`, paths always derived from UUIDs server-side.
 
 Key non-obvious behaviors:
-- **Cell edits are value-only** (`PUT /workbooks/{id}/worksheets/{id}` takes `{edits: [{row, column, value}]}`) —
-  no separate formula field. openpyxl auto-detects a leading `=` in a value string and stores it as a
-  real formula, so formula edits are sent as plain value edits containing formula text.
+- **Cell edits (`PUT /workbooks/{id}/worksheets/{id}`, `{edits: [CellEdit, ...]}`) cover value, formula,
+  and per-cell formatting — but NOT merges, column/row sizing, freeze panes, sort, or filter.** Those
+  remain read-only reflections of whatever the originally-uploaded file had; editing them in the grid has
+  nowhere to be saved. `CellEdit` is `{row, column, value, number_format?, bold?, italic?, font_color?,
+  fill_color?, horizontal_alignment?, vertical_alignment?, borders?}` — no separate formula field,
+  openpyxl auto-detects a leading `=` in `value` and stores it as a real formula, so formula edits are
+  just value edits containing formula text.
+- **Every style field on `CellEdit` is PATCH-semantic, not full-replace.** The route dumps each edit with
+  `exclude_unset=True`, so a field the request JSON never mentioned is left off the dict entirely, and
+  `apply_cell_edits`/its `_apply_font`/`_apply_fill`/`_apply_alignment`/`_apply_border` helpers
+  (`app/spreadsheet/cell_editor.py`) only touch a style aspect when its key is actually present in the
+  edit (`"bold" in edit`, not `edit.get("bold")` — a request sending `"bold": false` must still flip bold
+  off). This is what lets an old-shape `{row, column, value}` caller keep working without wiping a cell's
+  existing formatting, and it's also why untouched font attributes this app doesn't track at all (family,
+  size, underline, strikethrough) survive an edit — each style setter rebuilds its openpyxl style object
+  by copying forward from the cell's *existing* style and only overriding the fields the edit provided.
+  `borders` is the one exception to per-field patching: it's a single nested dict, so its presence at all
+  means "here is the cell's complete 4-side border state," matching the shape `read_worksheet_data`
+  already returns — see `_apply_border`'s comment.
+- The frontend's own autosave diff (`src/univer/adapter.ts`'s `diffCellValues`) doesn't rely on that
+  partial-patch flexibility: whenever anything about a cell changes, it sends **every** style field
+  together as that cell's current, complete formatting snapshot, so in practice its edits behave like a
+  full replace. The PATCH semantics on the backend exist for robustness against any other caller, not
+  because the frontend needs them.
+- **`apply_cell_edits` sets `.value` directly, not via `ws.cell(row, column, value=...)`.** That
+  convenience method treats `value=None` as "no value was given" and silently skips the assignment (`if
+  value is not None: cell.value = value`, in openpyxl's own source) — so clearing a cell's content (type
+  something, then delete it) looked like a normal successful save but the old value stayed on disk. Found
+  via the same "measure against the real file on disk, not just the API response" discipline used
+  elsewhere in this file — the API response for the edit itself gave no hint anything was wrong. Fixed;
+  regression test in `tests/test_worksheets.py` (`test_edit_worksheet_can_clear_a_cell_value`).
+- **Formatting/merge persistence hasn't been live-verified in the browser yet** (as of 2026-09-15) — the
+  backend contract above is proven via `tests/test_worksheets.py` (pytest's `TestClient`, which exercises
+  the real route → schema → service → cell_editor → openpyxl-on-disk path end to end) and the frontend
+  half via `src/univer/adapter.test.ts`, but the two haven't been exercised together through an actual
+  running Univer grid — see [[browser-tool-mcp-conflict]] for why (recurred again this session; dev
+  servers were stopped rather than fought with). Do this once the browser tool is usable again: change a
+  cell's bold/fill/border/alignment/number-format in the grid, reload, confirm it stuck.
 - **Formula values are frequently stale/null**: openpyxl has no calculation engine. Reading a formula
   cell's cached result requires a *second* `load_workbook(path, data_only=True)` load
   (`app/spreadsheet/excel_io.py`); the backend never recalculates.
@@ -248,25 +283,30 @@ npm test            # vitest run
 src/api/          typed fetch wrappers, one file per backend area (client.ts has the shared auth/401 logic)
 src/auth/         AuthContext, ProtectedRoute/AdminRoute (role-gated)
 src/routes/       page components (LoginPage, WorkspacePage, EditorPage, ...)
-src/fortunesheet/ adapter.ts (backend <-> Fortune-sheet format conversion) + FortuneSheetGrid.tsx wrapper
+src/univer/       adapter.ts (backend <-> Univer format conversion) + UniverSheetGrid.tsx mount component
 src/hooks/        useDebouncedAutosave (per-worksheet diff/save), useFileDownload (auth'd blob download)
 src/components/   workspace/, editor/, childSheet/, sync/ — grouped by feature area
 src/types/        TypeScript interfaces mirroring the backend's Pydantic schemas exactly
 ```
 
-All of a workbook's worksheets (original + child) are fetched and loaded into **one** Fortune-sheet
-`<Workbook>` instance at once (`EditorPage.tsx`), so its own native bottom tab strip — and its native
-"add a blank sheet" button — manage every sheet directly, the same way they would in Excel/Google
-Sheets. A blank sheet added via that native button has no backend worksheet id and is never persisted;
-autosave silently skips any sheet whose `id` isn't a known backend worksheet id.
+**The spreadsheet engine is Univer (`@univerjs/*`), not Fortune-sheet.** Fortune-sheet was the original
+engine; it was fully replaced after an unfixable upstream crash (see "Formula values" below for the full
+investigation and "Migration to Univer" for what changed). `src/fortunesheet/` no longer exists.
+
+All of a workbook's worksheets (original + child) are fetched and assembled into **one** `IWorkbookData`
+object and mounted into **one** Univer instance at once (`EditorPage.tsx` → `UniverSheetGrid.tsx`), so
+its own native bottom tab strip — and its native "add a blank sheet" button — manage every sheet
+directly, the same way they would in Excel/Google Sheets. A blank sheet added via that native button has
+no backend worksheet id and is never persisted; autosave silently skips any sheet whose `id` isn't a
+known backend worksheet id.
 
 This replaced an earlier design (one custom-built tab list above the grid, lazily fetching one
 worksheet at a time as each custom tab was clicked) after user feedback: the custom tab list duplicated
-what Fortune-sheet already does natively and looked wrong (top-positioned, out of place next to Fortune-
-sheet's own bottom tabs). Any app-specific action that doesn't fit Fortune-sheet's native UI (create
-child sheet, sync status/button) lives in its own small panel above the grid instead — see below —
-rather than trying to inject custom UI into Fortune-sheet's native toolbar/tab strip, which isn't
-designed to be extended that way.
+what the grid library already does natively and looked wrong (top-positioned, out of place next to the
+library's own bottom tabs). Any app-specific action that doesn't fit the native UI (create child sheet,
+sync status/button) lives in its own small panel above the grid instead — see below — rather than
+trying to inject custom UI into the native toolbar/tab strip, which isn't designed to be extended that
+way.
 
 ### Child sheet sync (`components/sync/ChildSheetSyncPanel.tsx`)
 
@@ -295,33 +335,248 @@ server state," check the backend directly first (a plain `fetch` with the stored
 the mutation/sync logic itself is wrong — both bugs above turned out to be pure client-side caching
 issues with a fully correct backend underneath.
 
-**`src/fortunesheet/adapter.ts` is the highest-risk file in the frontend** — it's the boundary between
-our backend's 1-indexed `WorksheetData`/`CellData` shape and Fortune-sheet's 0-indexed internal format,
-and several of its details were only discoverable by reading `@fortune-sheet/core`'s compiled source
-(thin/incomplete official docs) or by live-testing against the running app:
+**`src/univer/adapter.ts` is the highest-risk file in the frontend** — it's the boundary between our
+backend's 1-indexed `WorksheetData`/`CellData` shape and Univer's 0-indexed `IWorksheetData`/`ICellData`
+format. Its details were confirmed by reading Univer's actual installed `.d.ts` files directly (the
+public docs don't fully enumerate these shapes), and by live-testing against the running app:
 
-- Fortune-sheet's `onChange` callback delivers each sheet with a **dense `data` matrix**
-  (`data[row][col]`), not the sparse `celldata` array used for the *initial* load — reading `celldata`
-  in `extractCellValues` for onChange payloads silently produces an empty map, which then diffs as
-  "every cell deleted." `extractCellValues` handles both shapes; keep it that way.
-- A cell needs its **`m` field** (display string) set explicitly for numeric values to render — Fortune-
-  sheet's canvas renderer doesn't reliably derive display text from `v` alone when cells are constructed
-  directly (bypassing its own `setCellValue` path) rather than typed by a user.
-- **Merged cells need a per-cell `mc` marker on every cell in the range** (not just a `config.merge`
-  entry) — `mc: {r, c, rs, cs}` on the top-left anchor cell, `mc: {r, c}` (pointing at the anchor) on
-  every other cell in the range, including otherwise-empty ones that wouldn't normally get a `celldata`
-  entry at all.
+- Univer's `SheetValueChanged` event doesn't hand you a convenient per-change diff — the handler just
+  pulls the **whole current workbook snapshot** via `univerAPI.getActiveWorkbook().getSnapshot()` on
+  every firing (same "full snapshot per change" shape Fortune-sheet's `onChange` prop used, just
+  event-driven instead of prop-driven). `extractCellValues`/`diffCellValues` do the actual diffing
+  against each worksheet's own last-saved baseline.
+- **No `m` (display string) field or per-cell merge markers are needed** — Univer derives display text
+  from `v` itself, and merges are one flat `mergeData: IRange[]` entry per range
+  (`{startRow, endRow, startColumn, endColumn}`), not a marker on every cell in the range. Both of these
+  were required workarounds under Fortune-sheet that Univer's data model doesn't need.
 - **Column width/row height units differ**: openpyxl reports column width in Excel "character units"
-  and row height in points; Fortune-sheet's `columnlen`/`rowlen` want pixels
-  (`width * 7 + 5` and `height * 96/72` respectively — approximate, not pixel-exact).
-- **Border style names map to fixed numeric codes** confirmed against Fortune-sheet's source
+  and row height in points; Univer's `columnData[i].w`/`rowData[i].h` want pixels
+  (`width * 7 + 5` and `height * 96/72` respectively — approximate, not pixel-exact; same conversion the
+  Fortune-sheet adapter used).
+- **Border style names map to fixed numeric codes** confirmed against Univer's `BorderStyleTypes` enum
   (`thin: 1, hair: 2, dotted: 3, dashed: 4, dashDot: 5, dashDotDot: 6, double: 7, medium: 8,
-  mediumDashed: 9, mediumDashDot: 10, mediumDashDotDot: 11, slantDashDot: 12, thick: 13`).
+  mediumDashed: 9, mediumDashDot: 10, mediumDashDotDot: 11, slantDashDot: 12, thick: 13`) — these numbers
+  happen to be identical to the ones Fortune-sheet used, so the mapping carried over unchanged.
+  `HorizontalAlign`/`VerticalAlign` (1/2/3) match the same way.
 - **A formula cell is tracked by its formula text, not its computed value**, in the autosave diff
   (`trackedCellValue` in `adapter.ts`) — otherwise a pure recalculation (formula unchanged, cached result
-  changes) would be mistaken for a user edit and re-saved.
+  changes) would be mistaken for a user edit and re-saved. Same reasoning as under Fortune-sheet.
+- **A cell must be included in `cellData` whenever it has *any* signal** — value, formula, or pure
+  formatting (border/bold/fill/etc. with no value) — not just value-or-formula. A regression here
+  (`cellHasSignal` in `adapter.ts`) was caught by a failing unit test before it reached live testing: an
+  earlier version silently dropped borders-only/style-only cells that the backend's own
+  `_cell_has_signal()` had deliberately kept.
 
 `useDebouncedAutosave` tracks a separate "last saved" baseline `CellValueMap` per worksheet id (not one
 global baseline), since multiple sheets are loaded and can be edited independently. It debounces
-`onChange` (~1s), diffs each changed sheet against its own baseline, and serializes saves per sheet
+`handleChange` (~1s), diffs each changed sheet against its own baseline, and serializes saves per sheet
 (a newer snapshot arriving mid-save is queued, never dropped or fired concurrently).
+
+### Formula values: why they went blank, what was fixed, and where Fortune-sheet was left
+
+Triggered by a real report: formula cells on a large real workbook (22 sheets, hundreds of formulas)
+showed no value at all, then the app started crashing outright when a fix was attempted. Investigated
+with the same "measure, don't guess" discipline as the large-workbook performance work above — every
+claim below was reproduced directly, not inferred.
+
+**Root cause 1 — our own save path silently destroys every formula cell's cached value, on every
+single save, workbook-wide.** Proven with an isolated repro: built a file with a real cached formula
+result, ran it through `apply_edits`/`save_workbook` editing a totally unrelated cell, and the cached
+result was gone afterward — formula text untouched, `calculated_value` now `None`. The reason:
+`excel_io.load_workbook(path, data_only=False)` (required for editing) never reads cached results into
+memory in the first place, so saving that object back out has nothing to write for *any* formula cell
+in the file, not just the one edited. This is structural, not a bug introduced by any single change —
+it explains why a workbook that "used to show a value" stops doing so purely from normal use over time,
+and it means the backend can **never** reliably supply a formula's computed value; only the *original*
+Excel-authored cache (before our first save) or a client-side calculation can.
+
+**Root cause 2 — a bare Excel error literal embedded in formula text crashes Fortune-sheet's parser.**
+Confirmed directly against a real file: 31 formula cells across 9 sheets contained a literal `#REF!`
+(e.g. `=H120+H113+H144+H138+#REF!`), left by Excel when a deleted row/column broke the reference.
+Fortune-sheet's `formula-parser` only defines `#REF!` etc. as possible calculation *outputs* (see its
+own `error.js`), not as a token its grammar can parse when one appears as *input* text — attempting to
+calculate such a cell throws deep inside its own internals (`calculateSheetFromula`/`setCellValue`).
+**Fixed** in `src/fortunesheet/adapter.ts`: a formula containing a bare error literal is now sent as a
+plain value (the error text itself — what Excel would actually display for a cell like this), never as
+a live `f` formula, so Fortune-sheet's engine never touches it. Covered by a regression test in
+`adapter.test.ts`.
+
+**Root cause 3 — bulk-calculating many formulas on initial load is a known, open, unresolved limitation
+of Fortune-sheet itself**, not something in our code. After fixing #REF!, re-enabling
+`workbook.calculateFormula()` (the library's own documented mechanism for computing the `f` field —
+confirmed via its docs' cell-attribute table, not an undocumented hack) still crashed on the same real
+workbook with an identical stack trace, even wrapped in try/catch — meaning the throw happens
+asynchronously during Fortune-sheet's own deferred re-render, not synchronously inside the call.
+Bisected per-sheet with logging: all 44 individual `calculateFormula(sheetId)` calls across two full
+passes completed with zero throws — the crash isn't tied to any one sheet's formulas, it's the
+cumulative render. Confirmed as a real upstream limitation via Fortune-sheet's own GitHub issues:
+[#499](https://github.com/ruilisi/fortune-sheet/issues/499) ("Formula value calculation before render",
+open, no maintainer response) describes this exact failure mode — many formulas + `setCellValue`/
+recalculation causes cascading re-renders that "runs into issues... resulting in a warning" on the
+reporter's data, a hard crash on ours. There is currently no clean fix available from the library.
+
+**State when Fortune-sheet was still in use (kept here for the historical record):**
+- `EditorPage.tsx` called `workbookRef.current?.calculateFormula()` once after all sheets loaded — the
+  only way to get a real computed value, since the backend structurally cannot supply one (root cause 1).
+- `GridErrorBoundary` (`src/components/editor/GridErrorBoundary.tsx`) wrapped just `FortuneSheetGrid`,
+  not the whole route — root cause 3 still crashed on this specific large real workbook, but it degraded
+  to an in-place "Something went wrong rendering this spreadsheet" message instead of taking down the
+  whole app (previously: a full white-screen requiring reload, via React Router's default boundary).
+- Tried and **reverted**: loading sheets progressively (empty placeholder tabs immediately, real data
+  streamed in one sheet at a time via `updateSheet()`) to speed up perceived load time on large
+  workbooks. Produced React "duplicate key" errors and stale-fetch CORS noise under rapid navigation —
+  a separate problem from the formula crash, not worth the risk for a perceived-speed win. The real fix
+  for slow cold loads (backend openpyxl parse, ~12s cold vs ~0.2s warm on a real 22-sheet file) is
+  pre-warming the cache right after upload, not attempted yet — still true under Univer.
+
+### Migration to Univer — completed
+
+Given root cause 3 was unfixable on our end (an open, unresolved Fortune-sheet issue, not a bug in our
+code), a headless Node.js spike was run first (`@univerjs/presets` + `@univerjs/preset-sheets-node-core`,
+which explicitly supports headless Node execution for exactly this kind of use) against the real sheet
+that crashed Fortune-sheet — all 375 formula cells, including the raw unsanitized `#REF!` text (no
+adapter-style sanitization applied). Result: zero crashes, 375/375 cells computed a real value, and the
+`#REF!` cells were handled *natively* as proper error values (`"#REF!"`) with no special-casing needed —
+something that had to be built by hand for Fortune-sheet. That result was strong enough evidence to
+proceed with the full migration (scoped deliberately to spreadsheet functionality only — Univer also
+ships document/presentation products, both out of scope here).
+
+**What changed:** `src/fortunesheet/` (adapter.ts, FortuneSheetGrid.tsx, adapter.test.ts) was deleted
+entirely and `@fortune-sheet/react` uninstalled. It was replaced by `src/univer/adapter.ts` (backend↔
+Univer conversion, see the adapter details above) and `src/univer/UniverSheetGrid.tsx` (imperative mount
+component — Univer has no official React wrapper; it's a DI-container architecture mounted into a plain
+DOM node via `createUniver()`). `useDebouncedAutosave` and `EditorPage.tsx` were rewired accordingly.
+Added packages: `@univerjs/presets`, `preset-sheets-core`, `preset-sheets-filter`, `preset-sheets-sort`,
+`preset-sheets-find-replace`, `preset-sheets-data-validation`, `preset-sheets-conditional-formatting`
+(all pinned `0.25.1`).
+
+The old `calculateFormula()` ref call is **gone, not replaced** — Univer computes formulas on load by
+itself, confirmed live, with no explicit trigger needed. `GridErrorBoundary` was kept wrapping the grid
+regardless, as cheap general-purpose insurance against a third-party library crash, not because a
+specific crash is expected under Univer.
+
+One real bug surfaced during the port, caught by a failing test before it ever reached the browser: the
+new adapter's cell-inclusion check (`cellHasSignal` in `adapter.ts`) initially only looked at
+value/formula, silently dropping borders-only/style-only cells that the old Fortune-sheet adapter had
+correctly preserved via a separate code path. Fixed before merging — see the adapter bullet list above.
+
+**Live-verified**, not just unit-tested: both on a simple file (`merged_cells_test.xlsx` — merges, styled
+headers, real data, and Univer's native French ribbon UI all rendered correctly) and on the exact 22-sheet
+real workbook that used to crash Fortune-sheet — it now loads cleanly with Univer's own "calculating..."
+progress indicator, and cell `I145` (formula `=I120+I113+I144+I138+#REF!`, the concrete cell that used to
+crash the app) now displays `"#REF!"` with Univer's native red error styling, exactly matching the
+spike's prediction, with zero crash-related console errors.
+
+**Known gaps, not yet exercised:** Univer's other installed presets (sort, filter, find-replace, data
+validation, conditional formatting) are configured but not yet click-tested end-to-end. `npm audit`
+reports 97 vulnerabilities (94 high) introduced by the Univer package tree — not yet investigated. The
+backend's edit contract now covers value, formula, and per-cell formatting (see the `CellEdit` bullets
+under Backend Architecture above) — but still nothing for merges, column/row sizing, freeze panes, sort,
+or filter, so those remain read-only reflections of the originally-uploaded file.
+
+### Revisiting a workbook after editing showed the old value, then the new one the second time
+
+Reported directly by the user (2026-09-16): edit a cell (value or formatting), navigate back to
+`/workspace`, then back into the same workbook — the edit appeared to be gone. Navigate away and back a
+*second* time and it was there. Root-caused without needing the live browser (it was unavailable this
+session — see [[browser-tool-mcp-conflict]]) by reading the actual query/mount code path:
+
+- `EditorWorkbook`'s `useQuery(["worksheets", workbookId, worksheetIds])` (`EditorPage.tsx`) uses
+  TanStack Query's defaults: `staleTime: 0` but a normal (non-zero) `gcTime`. On remounting the editor
+  route, an existing cache entry for that exact key is served **synchronously** — the pre-edit snapshot,
+  since nothing ever invalidates this specific query after a save — while a background refetch fires and
+  silently updates the cache once it resolves.
+- `UniverSheetGrid` (`src/univer/UniverSheetGrid.tsx`) reads its `workbookData` prop **once, at mount**
+  and never again (the mount effect's deps deliberately exclude it — see its own comment; it owns the
+  grid's whole lifecycle from there, the same way Fortune-sheet's `data` prop worked). It has no way to
+  notice that background refetch resolving after its own mount already ran with the stale snapshot.
+- Net effect: 1st revisit → grid mounts from stale cache → edit looks lost, but the ignored background
+  refetch has by now already updated the cache. 2nd revisit → grid mounts from that now-correct cache →
+  edit shows up. Exactly the reported pattern.
+
+**Fixed** by adding `gcTime: 0` to that one `useQuery` call, not by touching the grid or the save path.
+With `gcTime: 0`, React Query evicts the cache entry the instant the last observer unsubscribes — i.e.
+right when `EditorPage` unmounts on navigating away — so a genuine remount always finds no cache, shows
+the existing "Loading worksheets..." state, and mounts the grid only once a real, fresh fetch resolves.
+Scoped to just this query (not a global `QueryClient` default) since it's specifically the write-once-
+at-mount grid downstream that makes a stale-then-silently-corrected cache actively wrong here, not a
+general property every cached query in this app needs — other queries update their own consumers
+normally on refetch and don't have this failure mode. Same underlying category of bug as the child-sheet
+sync fix above (React Query cache serving stale data across a remount) — that one calls `removeQueries`
+explicitly at the moment of an intentional remount, which isn't safe to do from inside the autosave path
+here (it would evict the *actively observed* query on every successful save, forcing the mounted grid
+through a disruptive loading-state flicker while the user might still be typing); `gcTime: 0` only acts
+once there are zero observers, so it never fires while the editor is actually open.
+
+Live-verified once the Browser pane MCP tools were working again in a later session: edit a cell, leave,
+come back once — the edit shows up on that first return.
+
+### Language toggle (FR/EN): mechanism was already global, but most page text wasn't wired to it
+
+The `LangProvider` (`src/i18n/LangContext.tsx`) is a single app-wide context, localStorage-backed,
+mounted once at the root — toggling it already applied everywhere and persisted correctly. The actual
+bug (reported directly: "toggling to french should toggle all static data") was that most pages never
+consumed it — headings, table columns, button labels, empty/loading/error states, and even dates
+(`toLocaleDateString(undefined, ...)` follows the *browser's* locale, not the app's) were hardcoded
+English strings sprinkled through Workspace, Admin, and the Editor's own top bar. Fixed by wiring all of
+it through `copy.ts` (see that file for the full key list) — this is a "keep doing this" pattern for any
+new page: never hardcode user-facing text, always add a `copy.ts` key even for a one-off label.
+
+One dead/misleading piece found in the same sweep: the Settings modal had its own separate "Language"
+section — a permanently-disabled dropdown stuck on English with a "French — coming soon" note — left
+over from before the real header toggle existed, and never reconciled with it. Replaced with a segmented
+FR/EN control wired to the same `useLang()` state (confirmed live: toggling in Settings flips the header
+toggle instantly, and vice versa — provably the same state, not a second parallel preference).
+
+**Univer's own ribbon/menu UI does not participate in React state at all** — `createUniver()` bakes in a
+fixed `locale`/`locales` pair at construction time with no runtime "switch locale" call, so making the
+grid's chrome follow the toggle means tearing down and recreating the whole Univer instance
+(`UniverSheetGrid.tsx`) whenever `lang` changes, not just re-rendering. That turned two more
+non-obvious things up:
+
+- **Naively recreating on `lang` change would revert the grid to stale data.** `workbookData` is
+  deliberately read once at mount (see the prop's own comment) — Univer owns live edits internally after
+  that, so the prop itself is never updated as the user types. A `[lang]`-dependent effect that just
+  re-read `workbookData` on every recreate would silently discard any in-session edits (already safely
+  autosaved to the backend, but visibly gone from the tab) the moment someone toggled language. Fixed
+  with a `currentSnapshotRef`, populated from the *live* `workbook.save()` in the outgoing instance's own
+  cleanup, right before disposal — each recreate seeds from exactly where the previous instance left off,
+  not from the original prop.
+- **`univer.dispose()` called synchronously from a React effect cleanup raced with React's own commit**,
+  surfacing as a real console warning once this became reachable through normal use (toggling FR/EN from
+  Settings while a workbook is open — the Editor's gear icon opens the same Settings modal fixed above):
+  `Attempted to synchronously unmount a root while React was already rendering.` Root cause: Univer mounts
+  its *own* internal React root into whatever container it's given, and cleanup functions run
+  synchronously inside React's own commit — unmounting a second, unrelated root from in there is exactly
+  what triggers this warning. Fixed with two changes together, not just a delay: (1) each mount now
+  creates its own plain `container` div appended into a stable outer wrapper, instead of reusing one
+  shared ref — so a recreate can synchronously `container.remove()` for an instant, non-overlapping visual
+  cutover; (2) only the *actual* `univer.dispose()` call is deferred via a zero-delay `setTimeout`, after
+  the DOM is already detached, so React's own commit finishes first and there's nothing left on screen for
+  the deferred teardown to disturb.
+
+Separately, also fixed (same file, found via a genuine console warning, not guessed): `FWorkbook`'s
+`getSnapshot()` is `@deprecated` in the installed Univer version — `use 'save' instead`, per its own
+`.d.ts` doc comment. Same return shape (`IWorkbookData`); both call sites in `UniverSheetGrid.tsx` now
+call `.save()`.
+
+**That container-swap fix itself introduced a real, severe regression, caught immediately after by the
+user directly** ("the univer toolbar is moving continuously"): a toolbar dropdown measurably oscillating
+between two x-positions (~235px apart) roughly every 150ms — confirmed by sampling its
+`getBoundingClientRect()` in a loop rather than trying to eyeball it in a screenshot, since a screenshot
+only ever catches one frame of an oscillation. Cause: the new inner `container` (the node actually handed
+to Univer) had `display: "flex"` and `height: "100%"` added, neither of which the original single
+container div ever had. Univer manages its own internal layout (toolbar + canvas stacking, and
+apparently a ResizeObserver-driven decision about which toolbar buttons fit before collapsing the rest
+into an overflow menu) inside whatever node it's given — imposing an external flex/height context
+directly on that same node fought with Univer's own sizing, and the two kept "correcting" each other in
+a loop. Fixed by making the inner `container` match the original's styling exactly (`flex: 1; min-height:
+0; width: 100%`, nothing else) and moving `display: flex; flex-direction: column` to the *outer* wrapper
+instead, which is what actually needs to establish a flex context — the inner container gets what it had
+before, just nested one level deeper. Re-verified with the same position-sampling approach: `swing: 0`
+across 3.6s of sampling, both before and after a lang-triggered recreate.
+
+The general lesson, worth remembering for any future change to this file: **a plain screenshot cannot
+prove a layout is stable** — it proves the layout was fine at that one instant. Sampling a real DOM rect
+in a loop (`getBoundingClientRect()` every ~150ms for a few seconds) is what actually caught this, and is
+the right verification method for "is anything jittering/oscillating," not repeated single screenshots.
