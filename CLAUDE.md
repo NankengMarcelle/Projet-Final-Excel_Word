@@ -263,6 +263,68 @@ lighter wire format (e.g. an array-of-arrays cell format instead of one JSON obj
 per cell) or loading only the active sheet up front and fetching the rest lazily as tabs are switched to
 — a bigger change than this pass, left for when it's actually needed.
 
+### Word export: styles not preserved, then a 2-minute/57-page conversion (`app/spreadsheet/word_exporter.py`)
+
+Two separate user reports, investigated back to back. First: converting a sheet to Word didn't preserve
+styling — "should almost be an exact copy." Second, on the real 21-sheet workbook this project uses for
+testing: one sheet took **over 2 minutes** to convert into a **57-page**, largely blank document.
+Reproduced and fixed against that exact file's worst sheet (`sp3 ppa traité`: 528×525 declared cells,
+257 merged ranges), not synthetic data — every number below is measured, not estimated.
+
+**Style-fidelity bugs fixed** (`worksheet_to_docx`): cell shading firing on non-"solid" fills (e.g.
+`"gray125"`, OOXML's leftover marker on a merely-touched cell — same rule `worksheet_service.py`'s read
+path already applied, just missing here); no vertical alignment, underline, font name, or row heights;
+raw `datetime` values rendering as `"2026-09-15 00:00:00"` instead of a readable date; and a real crash —
+font/fill colors were handed to python-docx as openpyxl's raw 8-char ARGB string, but both
+`RGBColor.from_string()` and `<w:shd w:fill>` require plain 6-char RGB, so any colored-font cell 500'd
+the whole conversion (the frontend showed this as "Converting..." hanging, not an error, until it
+eventually surfaced "Conversion failed").
+
+**Performance: three compounding bugs, found by actually measuring each stage, not guessing** (a repeated
+lesson this session — see the two premature-kill mistakes in this investigation's own history: judging a
+background conversion "stuck" and killing it before it had actually finished, twice, before finally
+letting one run to completion and finding the real number):
+
+1. **Uncached full-workbook load.** `conversion_service.convert_worksheet()` called `excel_io.load_workbook()`
+   (uncached) — parsing *all 21 sheets* just to convert one. Fixed: use `excel_io.load_workbook_cached()`,
+   the same cache `worksheet_service.py` already uses (see the section above) — safe here because
+   `worksheet_to_docx` only reads the worksheet, never mutates it.
+2. **`cell_has_signal()` false-positiving on Excel's own defaults.** A blanket formatting sweep had
+   written `font_color="FF000000"` (black — the default text color) and `vertical="bottom"` (Excel's
+   default for an unwrapped cell) onto ~500 phantom columns with no actual data. Both were counted as
+   "real signal," so the sheet's computed used-range stayed at its full declared 525 columns instead of
+   its true 19 — the exact same "gray125" class of bug, just on two different attributes. Fixed by
+   excluding those specific default-equivalent values (`app/spreadsheet/cell_signal.py`) — this function
+   is shared with the read path, so the fix also tightens the JSON API's own cell-signal filtering, not
+   just Word export.
+   - This bug is what backs `used_range()` (new, `cell_signal.py`): trims the exported table to the
+     sheet's *real* content instead of openpyxl's declared `max_row`/`max_column`, which can be wildly
+     inflated by stale formatting far beyond any actual data — confirmed directly: this exact sheet
+     declared 528×525 (277,200 cells) with only 7,395 (2.7%) holding any real content, before the
+     default-equivalent-value fix above corrected that further down to the true 528×19.
+3. **`table.cell(row, col)` is O(total table size) per call, called in a loop.** python-docx's
+   `Table.cell()` rebuilds the table's *entire* cell list — walking every `<w:tc>` XML element — on every
+   single call; it's a plain, uncached `@property` under the hood, not the O(1) indexed access its name
+   suggests. Calling it once per cell in the main styling loop, and twice per merged range, made the
+   whole export effectively O(total_cells²). Measured in isolation (not the whole pipeline, to pin down
+   which part): the per-cell styling loop alone, once fixed, is **28.89s** for 10,032 cells (linear,
+   confirmed via progress checkpoints); the *unfixed* merge loop — only 257 calls to `.merge()`, each
+   needing 2 lookups — was responsible for the other **~300 of 343 seconds** on its own. Fixed two ways:
+   - Main loop: fetch each row's cells once (`table.rows[r].cells`) before the loop starts, index into
+     that cached list per cell — safe because no merges have happened yet at this point.
+   - Merge loop: can't use a cache built once (merging mutates the tree, so a later merge needs
+     up-to-date state) — but doesn't need `table.cell()`'s full-table rebuild either. Use
+     `table.rows[r].cells[c]` per merge instead: always live/correct, but only walks that one row's own
+     elements (`_Row.cells`), not the whole table.
+   - Column-width loop: same fix, with a *fresh* row-cells cache built after the merge loop (not reused
+     from before it, since merging can invalidate cell references cached across that boundary).
+
+**Result, same real sheet, verified end-to-end**: load 5.14s + `used_range` + full per-cell styling loop
++ merge loop + column/row sizing + save, all inside `worksheet_to_docx` → **36.15s**. Total conversion:
+**41.30s**, down from 2+ minutes on the *already-slow* original code (which didn't yet have the
+used-range fix at all — the true pre-fix time, at the full 277,200-cell scale, would have been far worse
+than the 2 minutes originally reported). Output verified correct: a 528×19 table (not 528×525), 108 KB.
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running

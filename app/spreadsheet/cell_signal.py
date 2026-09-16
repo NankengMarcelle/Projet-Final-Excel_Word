@@ -13,6 +13,16 @@ def color_to_hex(color) -> str | None:
     return rgb if isinstance(rgb, str) else None
 
 
+# Values openpyxl can report as "explicitly set" that are nonetheless visually identical to
+# an untouched cell — confirmed directly against a real workbook (see used_range()'s
+# docstring): a blanket formatting sweep across ~500 columns had written these two exact
+# values onto every cell it touched, with no actual data or visible difference from a plain
+# cell. Same category of trap as fill_type "gray125" below, just on different attributes.
+_DEFAULT_FONT_COLOR_HEX = {"FF000000", "00000000", "000000"}  # black == default text color
+_DEFAULT_HORIZONTAL_ALIGNMENT = "general"  # Excel's own default, sometimes written explicitly
+_DEFAULT_VERTICAL_ALIGNMENT = "bottom"  # Excel's own default for an unwrapped cell
+
+
 def cell_has_signal(cell) -> bool:
     """True if this cell carries anything worth treating as real content — a value/formula,
     or formatting that actually differs from an untouched cell's defaults. Plenty of
@@ -21,13 +31,20 @@ def cell_has_signal(cell) -> bool:
     if cell.value is not None:
         return True
     font = cell.font
-    if font and (font.bold or font.italic or color_to_hex(font.color)):
-        return True
+    if font:
+        if font.bold or font.italic:
+            return True
+        font_color = color_to_hex(font.color)
+        if font_color and font_color not in _DEFAULT_FONT_COLOR_HEX:
+            return True
     if cell.fill and cell.fill.fill_type == "solid" and color_to_hex(cell.fill.fgColor):
         return True
     alignment = cell.alignment
-    if alignment and (alignment.horizontal or alignment.vertical):
-        return True
+    if alignment:
+        if alignment.horizontal and alignment.horizontal != _DEFAULT_HORIZONTAL_ALIGNMENT:
+            return True
+        if alignment.vertical and alignment.vertical != _DEFAULT_VERTICAL_ALIGNMENT:
+            return True
     if cell.number_format and cell.number_format != "General":
         return True
     border = cell.border

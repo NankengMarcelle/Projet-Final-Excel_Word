@@ -22,12 +22,15 @@ def convert_worksheet(
     conversion_id = uuid.uuid4()
     output_path = excel_io.conversion_storage_path(conversion_id)
 
-    wb = excel_io.load_workbook(Path(workbook.storage_path), data_only=True)
-    try:
-        ws = wb[worksheet.name]
-        word_exporter.worksheet_to_docx(ws, output_path)
-    finally:
-        wb.close()
+    # Cached, not a private load: worksheet_to_docx only reads ws (never mutates it), so it's
+    # safe to share the same cache read_worksheet_data already uses. The uncached load this
+    # replaced parsed the *entire* workbook — every other sheet too — on every single
+    # conversion; for a real multi-sheet workbook where one sheet has inflated declared
+    # dimensions (see used_range()'s own docstring), that meant paying to fully parse a
+    # 277,200-cell sheet just to convert a completely different, small one.
+    wb = excel_io.load_workbook_cached(Path(workbook.storage_path), data_only=True)
+    ws = wb[worksheet.name]
+    word_exporter.worksheet_to_docx(ws, output_path)
 
     conversion = Conversion(
         id=conversion_id, worksheet_id=worksheet.id, requested_by_id=requested_by_id, status="completed"

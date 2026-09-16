@@ -131,9 +131,23 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
     table.style = "Table Grid"
     _set_table_full_width(table)
 
-    for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+    # The other load-bearing fix here, found live (not guessed): python-docx's `Table.cell()`
+    # rebuilds the table's *entire* cell list from scratch — walking every <w:tc> element in
+    # the table — on every single call (it's a plain, uncached @property under the hood, see
+    # docx/table.py's `_cells`). Calling it once per cell inside this loop, as the original
+    # version of this function did, made the whole export O(total_cells²): confirmed directly
+    # — a used_range()-trimmed 528x19 (10,032-cell) sheet, already a 27x reduction from its
+    # declared 528x525, still hadn't progressed past its first couple thousand cells after a
+    # full minute. `_Row.cells` is much cheaper (it only walks that one row's own elements),
+    # so fetching each row's cells exactly once up front — before any merges, which mutate
+    # the tree and would invalidate cells cached across that boundary — turns this back into
+    # straightforward O(total_cells) work.
+    doc_rows = [row.cells for row in table.rows]
+
+    for row_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col), start=1):
+        doc_row_cells = doc_rows[row_idx - 1]
         for cell in row:
-            doc_cell = table.cell(cell.row - 1, cell.column - 1)
+            doc_cell = doc_row_cells[cell.column - 1]
             doc_cell.text = _cell_display_value(cell)
             paragraph = doc_cell.paragraphs[0]
             run = paragraph.runs[0] if paragraph.runs else paragraph.add_run("")
@@ -184,11 +198,28 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
         # rather than raise on a stale/out-of-range merge definition.
         if merged_range.min_row > max_row or merged_range.min_col > max_col:
             continue
-        start_cell = table.cell(merged_range.min_row - 1, merged_range.min_col - 1)
         end_row = min(merged_range.max_row, max_row)
         end_col = min(merged_range.max_col, max_col)
-        end_cell = table.cell(end_row - 1, end_col - 1)
+        # table.rows[r].cells[c] here, not table.cell(r, c): each merge can change the tree
+        # (so, unlike the main loop above, these lookups can't be cached once up front — they
+        # need to be live/current every time), but table.cell() pays for that by rebuilding
+        # the *entire* table's cell list on every call, same O(total_cells) cost as before,
+        # now paid twice per merge. table.rows[r].cells only walks that one row's own
+        # elements. Confirmed live on the real sheet this was found on: 257 merges through
+        # table.cell() was the dominant cost of a 343-second conversion — this row-scoped
+        # version is still always correct (never stale) but doesn't pay to re-walk every
+        # other row's cells just to find the two this particular merge needs.
+        start_cell = table.rows[merged_range.min_row - 1].cells[merged_range.min_col - 1]
+        end_cell = table.rows[end_row - 1].cells[end_col - 1]
         start_cell.merge(end_cell)
+
+    # Fresh cache, not the one from before the merge loop above: merging mutates the table's
+    # underlying XML (removing/reshaping <w:tc> elements), so cells cached across that
+    # boundary could reference nodes that no longer represent the current grid layout. Same
+    # O(total_cells²)-avoidance reasoning as the main loop's doc_rows — this loop was doing a
+    # fresh `.cells` walk (itself O(that row's width)) for every (column-with-a-set-width x
+    # row) combination.
+    doc_rows = [row.cells for row in table.rows]
 
     # Approximate: Excel's column-width unit isn't a real physical unit, this
     # is a rough visual heuristic, not a precise conversion.
@@ -196,8 +227,8 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
         dimension = ws.column_dimensions.get(get_column_letter(col_index))
         if dimension and dimension.width:
             width = Inches(dimension.width / 7.0)
-            for table_row in table.rows:
-                table_row.cells[col_index - 1].width = width
+            for doc_row_cells in doc_rows:
+                doc_row_cells[col_index - 1].width = width
 
     # Word treats row height as a minimum, not exact — this still helps rows with
     # deliberately tall content (wrapped text, larger fonts) come out closer to Excel's
