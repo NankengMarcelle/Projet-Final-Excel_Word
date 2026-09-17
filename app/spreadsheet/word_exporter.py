@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Inches, Pt, RGBColor
+from docx.shared import Cm, Emu, Inches, Pt, RGBColor
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet as OpenpyxlWorksheet
 
@@ -56,30 +57,145 @@ def _set_cell_shading(cell, hex_color: str) -> None:
     tc_pr.append(shd)
 
 
-def _set_cell_borders(cell, edges: dict) -> None:
+# Excel border style name -> (Word's w:val, w:sz in eighths-of-a-point). Previously every
+# border rendered identically as a thin black single line regardless of the source's actual
+# style or color — a report with a deliberate thick outer border and thin inner grid (a very
+# common real-world layout) came out looking uniformly flat. Word's ST_Border vocabulary
+# doesn't have a 1:1 match for every Excel style (there's no dash-dot-with-small-gap
+# equivalent, for instance) — these are the closest available, not exact.
+_BORDER_STYLE_TO_WORD: dict[str, tuple[str, int]] = {
+    "hair": ("single", 2),
+    "thin": ("single", 4),
+    "medium": ("single", 12),
+    "thick": ("single", 24),
+    "double": ("double", 4),
+    "dotted": ("dotted", 4),
+    "dashed": ("dashed", 4),
+    "dashDot": ("dotDash", 4),
+    "dashDotDot": ("dotDotDash", 4),
+    "mediumDashed": ("dashed", 12),
+    "mediumDashDot": ("dotDash", 12),
+    "mediumDashDotDot": ("dotDotDash", 12),
+    "slantDashDot": ("dashed", 12),
+}
+_DEFAULT_BORDER_COLOR = "000000"
+
+
+def _set_cell_borders(cell, sides: dict) -> None:
+    """`sides` maps edge name -> openpyxl `Side` object (or None/styleless), not just a
+    presence flag — so the actual style and color make it through instead of every border
+    being forced to the same thin black line."""
     tc_pr = cell._tc.get_or_add_tcPr()
     tc_borders = OxmlElement("w:tcBorders")
-    for edge_name, present in edges.items():
-        if not present:
+    for edge_name, side in sides.items():
+        if not side or not side.style:
             continue
+        word_val, size = _BORDER_STYLE_TO_WORD.get(side.style, ("single", 4))
+        color = _docx_rgb(getattr(side, "color", None)) or _DEFAULT_BORDER_COLOR
         edge_el = OxmlElement(f"w:{edge_name}")
-        edge_el.set(qn("w:val"), "single")
-        edge_el.set(qn("w:sz"), "4")
-        edge_el.set(qn("w:color"), "000000")
+        edge_el.set(qn("w:val"), word_val)
+        edge_el.set(qn("w:sz"), str(size))
+        edge_el.set(qn("w:color"), color)
         tc_borders.append(edge_el)
     tc_pr.append(tc_borders)
 
 
-def _set_table_full_width(table) -> None:
-    """Word's own "AutoFit to Window" — the table always spans the full page width,
-    columns scaled proportionally, rather than sizing to content. Set via raw OOXML
-    (<w:tblW w:type="pct" w:w="5000"/> — 5000 fiftieths-of-a-percent = 100%) since
-    python-docx's own `table.autofit` only toggles content-based autofit, not this."""
-    tbl_pr = table._tbl.tblPr
-    tbl_w = OxmlElement("w:tblW")
-    tbl_w.set(qn("w:type"), "pct")
-    tbl_w.set(qn("w:w"), "5000")
-    tbl_pr.append(tbl_w)
+# Excel's own default column width (in its character-count unit) when a column has no
+# explicit <col> dimension at all — openpyxl leaves ws.column_dimensions empty for such
+# columns rather than reporting this default, so callers have to supply it themselves.
+_DEFAULT_EXCEL_COLUMN_WIDTH = 8.43
+
+# Word's own effective default when a cell carries no explicit Excel font-size override —
+# close enough to Excel's own common default (Calibri 11) that such cells shrink in step with
+# the ones that do have an explicit size, instead of standing out at a fixed size.
+_DEFAULT_FONT_SIZE_PT = 11.0
+
+# However small the fit-to-page math below would like to go, still-legible text beats an
+# unreadable sliver — a floor, not a target. Real many-column report sheets routinely land
+# well above this (a readable ~6-8pt) once scaled; this only guards the pathological extreme.
+_MIN_FONT_SIZE_PT = 6.0
+
+
+def _compute_fit_to_page(ws, max_col: int, available_width: int) -> tuple[list[int], float]:
+    """Mirrors Excel's own "Fit to page width" print scaling: rather than keeping every column
+    at its normal Excel width and letting Word wrap (or crush) whatever doesn't fit, shrink the
+    *whole layout* — column widths and font size together, by one uniform factor — so the table
+    fits the page without ever wrapping text mid-word. A many-column report (this app's real
+    workbooks routinely have 18-19 columns) simply can't keep a normal ~11pt font at full
+    column width on one landscape page. The approach tried first — keep font size fixed, only
+    shrink columns — is what caused headers like "Autorisations d'Engagement" to wrap
+    letter-by-letter, confirmed live against a real workbook; rotating just the long headers
+    was tried next, but that's not actually what was wanted — shrinking the font, the same way
+    Excel's own print scaling does, is. Only ever shrinks text (never enlarges it): a small,
+    already-fitting sheet's columns still expand to fill the page, but its font stays as-is."""
+    raw_widths = []
+    for col_index in range(1, max_col + 1):
+        dimension = ws.column_dimensions.get(get_column_letter(col_index))
+        excel_width = dimension.width if dimension and dimension.width else _DEFAULT_EXCEL_COLUMN_WIDTH
+        raw_widths.append(Inches(excel_width / 7.0))
+    total = sum(raw_widths, Emu(0))
+    width_scale = available_width / total
+    column_widths = [Emu(int(width * width_scale)) for width in raw_widths]
+    font_scale = min(1.0, width_scale)
+    return column_widths, font_scale
+
+
+_NUMBER_FORMAT_BRACKET_RE = re.compile(r"\[[^\]]*\]")
+# Excel number-format "invisible spacer"/fill escapes: `_x` reserves blank space the width of
+# character x *without displaying x*, `\x` renders x as a plain literal (not part of the
+# numeric pattern), and `*x` repeat-fills the column with x. All three are routinely paired
+# with a currency symbol purely so plain-integer columns visually align with real currency
+# columns next to them — confirmed live against a real report: `_-* #,##0\ _€_-` is an
+# accounting-style *whole-number* format (no currency at all), but its literal "€" character
+# was being read as "this is currency" and prefixed onto every value, which Excel itself never
+# actually displays. Strip these before checking for a currency symbol.
+_NUMBER_FORMAT_SPACER_RE = re.compile(r"[_\\*].")
+_CURRENCY_SYMBOLS = ("$", "€", "£", "¥")
+
+
+def _format_number(value, number_format: str) -> str | None:
+    """Best-effort rendering of Excel's number_format codes for the patterns this app's real
+    (financial/report) workbooks actually use: percentages, thousands separators, fixed
+    decimals, simple currency. Returns None — caller falls back to the plain value — for
+    anything outside that: this is deliberately not a full Excel format-code interpreter
+    (hundreds of edge cases: date/time sub-codes, per-sign sections, conditional colors,
+    custom literal text), just the common numeric subset that was previously entirely
+    unhandled (every percentage/currency/thousands-formatted cell showed its raw float, e.g.
+    "0.15" instead of "15%")."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    if not number_format or number_format == "General":
+        return None
+
+    # Multi-section formats ("positive;negative;zero;text") — only the first (positive)
+    # section is interpreted. Strip conditional/color/locale tags like [Red] or
+    # [$€-x-euro2] first; they're not part of the actual numeric pattern. Then strip
+    # underscore/backslash/asterisk spacer-escapes (see _NUMBER_FORMAT_SPACER_RE) — a
+    # currency symbol appearing only inside one of those is cosmetic alignment, not a real
+    # currency marker.
+    fmt = _NUMBER_FORMAT_BRACKET_RE.sub("", number_format).split(";")[0]
+    fmt = _NUMBER_FORMAT_SPACER_RE.sub("", fmt)
+    if not any(ch in fmt for ch in "0#"):
+        return None  # not a recognizable numeric pattern (e.g. a custom text-only format)
+
+    is_percent = fmt.rstrip().endswith("%")
+    if is_percent:
+        fmt = fmt.rstrip()[:-1]
+        value = value * 100
+
+    currency_symbol = next((s for s in _CURRENCY_SYMBOLS if s in fmt), None)
+    if currency_symbol:
+        fmt = fmt.replace(currency_symbol, "")
+
+    use_thousands = "," in fmt
+    decimal_places = len(re.findall(r"[0#]", fmt.split(".", 1)[1])) if "." in fmt else 0
+
+    formatted = f"{value:,.{decimal_places}f}" if use_thousands else f"{value:.{decimal_places}f}"
+    if currency_symbol:
+        formatted = f"{currency_symbol}{formatted}"
+    if is_percent:
+        formatted = f"{formatted}%"
+    return formatted
 
 
 def _cell_display_value(cell) -> str:
@@ -89,21 +205,29 @@ def _cell_display_value(cell) -> str:
         # openpyxl hands back a real datetime/date object for a date-formatted cell (when
         # read with data_only=True) — str()'ing that directly gives an ugly
         # "2026-09-15 00:00:00" instead of anything resembling what Excel actually displays.
-        # Not a full number-format-string interpreter (Excel's format codes are a much
-        # bigger undertaking than this export needs to solve today) — just the single most
-        # common case that otherwise looks obviously broken.
+        # Not a full number-format-string interpreter — just the single most common case
+        # that otherwise looks obviously broken.
         if isinstance(cell.value, datetime) and (cell.value.hour or cell.value.minute):
             return cell.value.strftime("%Y-%m-%d %H:%M")
         return cell.value.strftime("%Y-%m-%d")
+    formatted = _format_number(cell.value, cell.number_format)
+    if formatted is not None:
+        return formatted
     return str(cell.value)
 
 
 def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
     """Best-effort visual mirror of a worksheet as a Word table.
 
+    Column widths and font size are scaled together to fit one page width (see
+    _compute_fit_to_page()) — the same tradeoff Excel's own "Fit to page width" print option
+    makes, rather than letting Word wrap long headers mid-word in narrow columns.
+
     Not pixel-perfect: Word interprets row height as a minimum (not exact), Excel's number
-    format codes aren't reproduced beyond dates, and its own autofit can still adjust exact
-    column proportions. Charts, images, and conditional formatting are not reproduced.
+    format codes are only reproduced for dates and the common numeric subset (percentages,
+    thousands separators, fixed decimals, simple currency — see _format_number()). Charts,
+    images, and conditional formatting are not reproduced. Theme-based colors (as opposed to a
+    cell's own explicit RGB) aren't resolved — see color_to_hex()'s own limitation.
     """
     document = Document()
     document.add_heading(ws.title, level=1)
@@ -129,7 +253,17 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
     max_row, max_col = used_range(ws)
     table = document.add_table(rows=max_row, cols=max_col)
     table.style = "Table Grid"
-    _set_table_full_width(table)
+
+    # Fixed layout + explicit widths summing to exactly the page's available width, plus a
+    # matching font-size shrink — see _compute_fit_to_page()'s docstring for why leaving column
+    # sizing to Word's own "AutoFit to Contents" (the default) produced unusably narrow columns
+    # on a wide, many-column sheet, and why shrinking columns without also shrinking the font
+    # doesn't work either.
+    table.autofit = False
+    available_width = section.page_width - section.left_margin - section.right_margin
+    column_widths, font_scale = _compute_fit_to_page(ws, max_col, available_width)
+    for col_index, width in enumerate(column_widths):
+        table.columns[col_index].width = width
 
     # The other load-bearing fix here, found live (not guessed): python-docx's `Table.cell()`
     # rebuilds the table's *entire* cell list from scratch — walking every <w:tc> element in
@@ -158,8 +292,8 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
             run.underline = bool(font.underline and font.underline != "none")
             if font.name:
                 run.font.name = font.name
-            if font.size:
-                run.font.size = Pt(font.size)
+            base_size = font.size or _DEFAULT_FONT_SIZE_PT
+            run.font.size = Pt(max(_MIN_FONT_SIZE_PT, base_size * font_scale))
             font_color = _docx_rgb(font.color)
             if font_color:
                 run.font.color.rgb = RGBColor.from_string(font_color)
@@ -182,14 +316,14 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
                     _set_cell_shading(doc_cell, fill_color)
 
             border = cell.border
-            edges = {
-                "top": bool(border.top and border.top.style),
-                "bottom": bool(border.bottom and border.bottom.style),
-                "left": bool(border.left and border.left.style),
-                "right": bool(border.right and border.right.style),
+            sides = {
+                "top": border.top,
+                "bottom": border.bottom,
+                "left": border.left,
+                "right": border.right,
             }
-            if any(edges.values()):
-                _set_cell_borders(doc_cell, edges)
+            if any(side and side.style for side in sides.values()):
+                _set_cell_borders(doc_cell, sides)
 
     for merged_range in ws.merged_cells.ranges:
         # A merge can extend past the trimmed used_range() boundary only if its own anchor
@@ -211,31 +345,32 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
         # other row's cells just to find the two this particular merge needs.
         start_cell = table.rows[merged_range.min_row - 1].cells[merged_range.min_col - 1]
         end_cell = table.rows[end_row - 1].cells[end_col - 1]
-        start_cell.merge(end_cell)
-
-    # Fresh cache, not the one from before the merge loop above: merging mutates the table's
-    # underlying XML (removing/reshaping <w:tc> elements), so cells cached across that
-    # boundary could reference nodes that no longer represent the current grid layout. Same
-    # O(total_cells²)-avoidance reasoning as the main loop's doc_rows — this loop was doing a
-    # fresh `.cells` walk (itself O(that row's width)) for every (column-with-a-set-width x
-    # row) combination.
-    doc_rows = [row.cells for row in table.rows]
-
-    # Approximate: Excel's column-width unit isn't a real physical unit, this
-    # is a rough visual heuristic, not a precise conversion.
-    for col_index in range(1, max_col + 1):
-        dimension = ws.column_dimensions.get(get_column_letter(col_index))
-        if dimension and dimension.width:
-            width = Inches(dimension.width / 7.0)
-            for doc_row_cells in doc_rows:
-                doc_row_cells[col_index - 1].width = width
+        if start_cell is end_cell:
+            continue
+        # merge() concatenates *every* absorbed cell's own paragraphs onto the anchor's —
+        # and every cell in this table starts with one (usually empty) paragraph, even ones
+        # never written to. So merging N cells leaves N-1 blank trailing paragraphs stacked
+        # after the anchor's real text. Confirmed live, not guessed: a single-row, 17-column
+        # title merge — one tight line in the source — came out as real text followed by 7+
+        # blank lines in Word, a large visible gap that looked like a row-height or wrapping
+        # bug but wasn't. Record the anchor's own (legitimate) paragraph count *before*
+        # merging, then trim the merged result back down to exactly that — not just "keep the
+        # first paragraph": a cell whose own source value has a real embedded newline (this
+        # sheet's title row does) legitimately has more than one paragraph of its own, and
+        # that has to survive the trim.
+        original_paragraph_count = len(start_cell.paragraphs)
+        merged_cell = start_cell.merge(end_cell)
+        for extra_paragraph in merged_cell.paragraphs[original_paragraph_count:]:
+            extra_paragraph._element.getparent().remove(extra_paragraph._element)
 
     # Word treats row height as a minimum, not exact — this still helps rows with
     # deliberately tall content (wrapped text, larger fonts) come out closer to Excel's
-    # proportions instead of Word's own default single-line row height.
+    # proportions instead of Word's own default single-line row height. Scaled by the same
+    # font_scale as the text itself, so a shrunk font doesn't leave rows far taller than the
+    # (now smaller) text actually needs.
     for row_index in range(1, max_row + 1):
         dimension = ws.row_dimensions.get(row_index)
         if dimension and dimension.height:
-            table.rows[row_index - 1].height = Pt(dimension.height)
+            table.rows[row_index - 1].height = Pt(dimension.height * font_scale)
 
     document.save(output_path)

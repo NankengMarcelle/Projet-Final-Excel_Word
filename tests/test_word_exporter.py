@@ -1,12 +1,14 @@
 from datetime import date
 
+import pytest
 from docx import Document
-from docx.shared import RGBColor
+from docx.shared import Inches, Pt, RGBColor
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 from app.spreadsheet.cell_signal import used_range
-from app.spreadsheet.word_exporter import worksheet_to_docx
+from app.spreadsheet.word_exporter import _format_number, worksheet_to_docx
 
 
 def test_used_range_ignores_phantom_dimension_beyond_real_content():
@@ -135,3 +137,222 @@ def test_worksheet_to_docx_applies_font_color_without_crashing(tmp_path):
     document = Document(output_path)
     run = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
     assert run.font.color.rgb == RGBColor.from_string("C81E1E")
+
+
+# --- Number format rendering ------------------------------------------------------------
+
+
+def test_format_number_percentage():
+    assert _format_number(0.15, "0%") == "15%"
+    assert _format_number(0.1534, "0.00%") == "15.34%"
+
+
+def test_format_number_thousands_and_decimals():
+    assert _format_number(1234.5, "#,##0.00") == "1,234.50"
+    assert _format_number(1234, "#,##0") == "1,234"
+
+
+def test_format_number_currency():
+    assert _format_number(1234.5, "$#,##0.00") == "$1,234.50"
+
+
+def test_format_number_returns_none_for_general_or_non_numeric():
+    assert _format_number(5, "General") is None
+    assert _format_number("text", "#,##0.00") is None
+    assert _format_number(True, "#,##0.00") is None  # bool is technically an int subclass
+
+
+def test_format_number_ignores_conditional_color_and_multi_section_formats():
+    # "[Red]-#,##0;[Blue]#,##0" style multi-section formats — only the first (positive)
+    # section should be interpreted, with the [Red]/[Blue] conditional-color tags stripped.
+    assert _format_number(1234, "[Blue]#,##0;[Red]-#,##0") == "1,234"
+
+
+def test_format_number_ignores_spacer_currency_symbols():
+    # Regression test, found from a real report: `_-* #,##0\ _€_-` is a French accounting
+    # format for a *plain whole number*, no currency at all — the "€" only appears inside a
+    # `_€` spacer escape (Excel's "reserve blank space the width of this character, but don't
+    # actually show it" directive), used purely so this column visually aligns with real
+    # currency columns next to it. Excel itself never displays that €; treating it as "this
+    # cell is currency" prefixed every value with a € sign that shouldn't have been there.
+    assert _format_number(1234, r"_-* #,##0\ _€_-") == "1,234"
+
+
+def test_worksheet_to_docx_renders_percentage_cell(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    cell = ws.cell(row=1, column=1, value=0.42)
+    cell.number_format = "0%"
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    assert document.tables[0].cell(0, 0).text == "42%"
+
+
+# --- Border style/color fidelity ---------------------------------------------------------
+
+
+def test_worksheet_to_docx_preserves_border_style_and_color(tmp_path):
+    # Regression test: every border used to render identically as a thin black single line
+    # regardless of the source's actual style/color/thickness.
+    wb = Workbook()
+    ws = wb.active
+    cell = ws.cell(row=1, column=1, value="X")
+    cell.border = Border(top=Side(style="thick", color="FFFF0000"))
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    doc_cell = document.tables[0].cell(0, 0)
+    top = doc_cell._tc.find(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tcBorders"
+        "/{http://schemas.openxmlformats.org/wordprocessingml/2006/main}top"
+    )
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    assert top.get(f"{ns}val") == "single"
+    assert top.get(f"{ns}sz") == "24"  # "thick" -> 24 eighths-of-a-point
+    assert top.get(f"{ns}color") == "FF0000"
+
+
+def test_worksheet_to_docx_defaults_border_color_when_unset(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    cell = ws.cell(row=1, column=1, value="X")
+    cell.border = Border(top=Side(style="thin"))  # no color specified
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    doc_cell = document.tables[0].cell(0, 0)
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    top = doc_cell._tc.find(f".//{ns}tcBorders/{ns}top")
+    assert top.get(f"{ns}color") == "000000"
+
+
+# --- Fit-to-page: columns and font shrink together, like Excel's own print scaling ------
+
+
+def test_worksheet_to_docx_shrinks_font_proportionally_to_fit_wide_sheet(tmp_path):
+    # Regression test: the first fix tried was shrinking column widths alone (to fit many
+    # columns on one landscape page) while leaving font size untouched — that made long labels
+    # wrap letter-by-letter instead of word-by-word, confirmed live against a real workbook.
+    # The actual fix mirrors Excel's own "Fit to page width" print scaling: shrink column
+    # widths *and* font size together by the same factor, so nothing has to wrap mid-word.
+    wb = Workbook()
+    ws = wb.active
+    # 5 columns at width 20 sums to a good deal more than one landscape page can hold, but not
+    # so much that scaling would clamp both fonts down to the floor (which would flatten out
+    # the very proportionality this test exists to check) — see the floor-clamp test below for
+    # that extreme case instead.
+    for col in range(1, 6):
+        ws.column_dimensions[get_column_letter(col)].width = 20
+    cell_with_explicit_size = ws.cell(row=1, column=1, value="Explicit")
+    cell_with_explicit_size.font = Font(size=14)
+    cell_with_default_size = ws.cell(row=1, column=2, value="Default")  # no Font() override at all
+    # used_range() only extends to columns with real cell *content* — a column-width-only
+    # column with no value in it wouldn't count, so give the last column a value too, or this
+    # test's sheet would only "really" be 2 columns wide regardless of the widths set above.
+    ws.cell(row=1, column=5, value="Last")
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    table = document.tables[0]
+    explicit_run = table.cell(0, 0).paragraphs[0].runs[0]
+    default_run = table.cell(0, 1).paragraphs[0].runs[0]
+
+    # Both shrank...
+    assert explicit_run.font.size.pt < 14
+    assert default_run.font.size.pt < 11
+    # ...by the *same* factor, so their relative sizes are preserved (14pt was always meant to
+    # look larger than the 11pt default, before or after scaling).
+    assert explicit_run.font.size.pt / default_run.font.size.pt == pytest.approx(14 / 11, rel=0.01)
+    # 5 columns at 20 Excel-width-units each is wider than any standard page — column widths
+    # must have actually shrunk too, not just gotten set to their naive (large) size.
+    assert table.columns[0].width < Inches(2)
+
+
+def test_worksheet_to_docx_floors_font_size_rather_than_shrinking_to_nothing(tmp_path):
+    # An extreme column count/width combination shouldn't drive the font down to an
+    # unreadable sliver (or zero) — it should stop at a legible floor instead.
+    wb = Workbook()
+    ws = wb.active
+    for col in range(1, 16):
+        ws.column_dimensions[get_column_letter(col)].width = 30
+    cell = ws.cell(row=1, column=1, value="X")
+    cell.font = Font(size=14)
+    ws.cell(row=1, column=15, value="Last")
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    run = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
+    assert run.font.size.pt == pytest.approx(6.0)
+
+
+def test_worksheet_to_docx_does_not_shrink_font_when_sheet_already_fits(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    cell = ws.cell(row=1, column=1, value="X")
+    cell.font = Font(size=12)
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    run = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
+    assert run.font.size == Pt(12)
+
+
+# --- Merged cells shouldn't accumulate blank paragraphs ---------------------------------
+
+
+def test_merging_a_wide_range_does_not_leave_blank_trailing_paragraphs(tmp_path):
+    # Regression test for a real bug found from a live screenshot comparison, not guessed:
+    # python-docx's Cell.merge() concatenates every merged cell's own paragraphs onto the
+    # anchor's. Every cell in this table starts with one (empty) paragraph even if never
+    # written to, so merging N cells left N-1 blank trailing paragraphs stacked after the
+    # anchor's real text — a single tight title line in the source came out as real text
+    # followed by 7+ blank lines in Word, a large, obviously-wrong visual gap.
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(row=1, column=1, value="Title")
+    # Columns B-F: real cells, but never written to (no value) — exactly what a wide
+    # full-row title merge looks like in a real report.
+    ws.merge_cells("A1:F1")
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    doc_cell = document.tables[0].cell(0, 0)
+    assert len(doc_cell.paragraphs) == 1
+    assert doc_cell.text == "Title"
+
+
+def test_merging_preserves_a_real_embedded_newline_in_the_anchor_cell(tmp_path):
+    # The fix isn't "keep only the first paragraph" — trimming has to be relative to however
+    # many paragraphs the anchor cell itself legitimately had *before* merging, not a fixed
+    # "1". (In practice python-docx's own .text setter renders an embedded "\n" as a line
+    # break within a single paragraph rather than a second paragraph — confirmed directly —
+    # so today that's always 1 for this app's cells; this test pins that behavior so a future
+    # python-docx version — or a future change to how cell text gets set — that starts
+    # splitting on "\n" into real paragraphs doesn't silently regress back to the original
+    # bug via a trim that assumes exactly 1.)
+    wb = Workbook()
+    ws = wb.active
+    ws.cell(row=1, column=1, value="Line one\nLine two")
+    ws.merge_cells("A1:D1")
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws, output_path)
+
+    document = Document(output_path)
+    doc_cell = document.tables[0].cell(0, 0)
+    assert doc_cell.text == "Line one\nLine two"
