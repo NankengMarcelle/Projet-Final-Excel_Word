@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -356,3 +356,62 @@ def test_merging_preserves_a_real_embedded_newline_in_the_anchor_cell(tmp_path):
     document = Document(output_path)
     doc_cell = document.tables[0].cell(0, 0)
     assert doc_cell.text == "Line one\nLine two"
+
+
+# --- Formula cells fall back to formula text when the cached value is missing -----------
+
+
+def test_worksheet_to_docx_falls_back_to_formula_text_when_cached_value_is_missing(tmp_path):
+    # openpyxl never computes formulas itself, so a workbook it just created — or one whose
+    # cache was lost through an edit-save round trip (see
+    # excel_io.save_workbook_preserving_formula_cache's own docstring for how that happens on
+    # a real workbook) — has no cached value for a formula cell at all. Without a fallback,
+    # data_only=True gives back None with no way to tell "this was a formula" from "this cell
+    # is genuinely empty", and the cell renders completely blank.
+    wb = Workbook()
+    ws = wb.active
+    sheet_name = ws.title
+    ws["A1"] = 5
+    ws["A2"] = "=A1*2"
+    saved_path = tmp_path / "source.xlsx"
+    wb.save(saved_path)
+    wb.close()
+
+    ws_values = load_workbook(saved_path, data_only=True)[sheet_name]
+    ws_formulas = load_workbook(saved_path, data_only=False)[sheet_name]
+    assert ws_values["A2"].value is None  # confirms the premise: no cached value at all
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws_values, output_path, ws_formulas=ws_formulas)
+
+    document = Document(output_path)
+    table = document.tables[0]
+    assert table.cell(0, 0).text == "5"
+    assert table.cell(1, 0).text == "=A1*2"
+
+
+def test_worksheet_to_docx_without_a_formulas_view_still_renders_blank(tmp_path):
+    # Existing behavior when the caller has no second (data_only=False) load handy — every
+    # other test in this file relies on this staying exactly as it was. B2 (a plain value)
+    # is what pulls row 2 into the exported range at all here — a bare, cacheless formula
+    # cell with no formatting of its own wouldn't register as real content in the values-only
+    # view (see used_range()'s call site in worksheet_to_docx for why), so without it this
+    # test's row wouldn't exist to check in the first place.
+    wb = Workbook()
+    ws = wb.active
+    sheet_name = ws.title
+    ws["A2"] = "=A1*2"
+    ws["B2"] = "unrelated"
+    saved_path = tmp_path / "source.xlsx"
+    wb.save(saved_path)
+    wb.close()
+
+    ws_values = load_workbook(saved_path, data_only=True)[sheet_name]
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws_values, output_path)
+
+    document = Document(output_path)
+    table = document.tables[0]
+    assert table.cell(1, 0).text == ""
+    assert table.cell(1, 1).text == "unrelated"

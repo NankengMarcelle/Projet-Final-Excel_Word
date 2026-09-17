@@ -198,8 +198,17 @@ def _format_number(value, number_format: str) -> str | None:
     return formatted
 
 
-def _cell_display_value(cell) -> str:
+def _cell_display_value(cell, formula_cell=None) -> str:
     if cell.value is None:
+        # `cell` comes from a data_only=True load, which for a formula cell gives *only* the
+        # last cached result — nothing at all if that cache was ever lost (see
+        # excel_io.save_workbook_preserving_formula_cache's own docstring for how that
+        # happens). `formula_cell` is the same coordinate from a separate data_only=False
+        # load, which always has the formula text regardless of cache state — falling back to
+        # showing that (as Excel's own "show formulas" mode would) beats a silently blank
+        # cell, even though it's the formula, not the number it would have evaluated to.
+        if formula_cell is not None and formula_cell.data_type == "f":
+            return str(formula_cell.value)
         return ""
     if isinstance(cell.value, (datetime, date)):
         # openpyxl hands back a real datetime/date object for a date-formatted cell (when
@@ -216,8 +225,18 @@ def _cell_display_value(cell) -> str:
     return str(cell.value)
 
 
-def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
+def worksheet_to_docx(
+    ws: OpenpyxlWorksheet, output_path: Path, *, ws_formulas: OpenpyxlWorksheet | None = None
+) -> None:
     """Best-effort visual mirror of a worksheet as a Word table.
+
+    `ws` must be loaded with data_only=True (so formula cells show their calculated value,
+    not their formula text). `ws_formulas` is optional: the *same* worksheet loaded with
+    data_only=False instead, used only as a fallback so a formula cell whose cached value was
+    lost (see excel_io.save_workbook_preserving_formula_cache) shows its formula rather than
+    going silently blank — see _cell_display_value(). Without it, such cells just render
+    empty, which is why every existing caller that doesn't have a second load handy (all of
+    this file's own tests) still works fine passing only `ws`.
 
     Column widths and font size are scaled together to fit one page width (see
     _compute_fit_to_page()) — the same tradeoff Excel's own "Fit to page width" print option
@@ -250,7 +269,14 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
     # cells, 7,395 with any real content). Building and styling a table sized to the
     # declared dimensions instead of the real content is what previously made a single
     # bloated sheet take minutes to convert into a 50+ page, mostly-blank document.
-    max_row, max_col = used_range(ws)
+    # Prefer the formulas view for this, when available: a formula cell whose cached value was
+    # lost has .value == None in the values view with no other formatting to flag it as real
+    # content, so cell_has_signal() there would miss it entirely — used_range() could exclude
+    # a whole trailing row/column of formula cells, not just render them blank within it. A
+    # formula cell's .value in the formulas view is always its (non-None) formula text,
+    # regardless of cache state, so it's never missed there — matches how worksheet_service.py
+    # already does this same check for the JSON read path.
+    max_row, max_col = used_range(ws_formulas if ws_formulas is not None else ws)
     table = document.add_table(rows=max_row, cols=max_col)
     table.style = "Table Grid"
 
@@ -282,7 +308,8 @@ def worksheet_to_docx(ws: OpenpyxlWorksheet, output_path: Path) -> None:
         doc_row_cells = doc_rows[row_idx - 1]
         for cell in row:
             doc_cell = doc_row_cells[cell.column - 1]
-            doc_cell.text = _cell_display_value(cell)
+            formula_cell = ws_formulas.cell(row=cell.row, column=cell.column) if ws_formulas is not None else None
+            doc_cell.text = _cell_display_value(cell, formula_cell)
             paragraph = doc_cell.paragraphs[0]
             run = paragraph.runs[0] if paragraph.runs else paragraph.add_run("")
 

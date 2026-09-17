@@ -102,7 +102,15 @@ def apply_edits(
     try:
         ws = wb[worksheet.name]
         cell_editor.apply_cell_edits(ws, edits)
-        excel_io.save_workbook(wb, path)
+        # The cell(s) this edit actually touched are excluded from cache restoration — see
+        # save_workbook_preserving_formula_cache()'s own docstring for why reapplying their
+        # *pre-edit* cached value would be wrong (most importantly when the edit changed the
+        # formula itself).
+        edited_coordinates = {
+            (worksheet.name, ws.cell(row=edit["row"], column=edit["column"]).coordinate)
+            for edit in edits
+        }
+        excel_io.save_workbook_preserving_formula_cache(wb, path, exclude=edited_coordinates)
     finally:
         wb.close()
 

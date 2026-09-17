@@ -325,6 +325,95 @@ letting one run to completion and finding the real number):
 used-range fix at all — the true pre-fix time, at the full 277,200-cell scale, would have been far worse
 than the 2 minutes originally reported). Output verified correct: a 528×19 table (not 528×525), 108 KB.
 
+### Word export, round two: merge blank lines, wide-table crushing, and lost formula values
+
+Triggered by the user testing the fixed conversion against a real report (`sp2 ppa traité`) and comparing
+screenshots of the source sheet against the Word output side by side. Four separate bugs, found in that
+order — each confirmed against the real file, not synthetic data.
+
+**1. Merged cells left large blank gaps.** python-docx's `Cell.merge()` concatenates *every* merged
+cell's own paragraphs onto the anchor's — and every table cell starts with one (usually empty) paragraph
+even if never written to. A wide title-row merge (this sheet's row 2, 17 columns) came out as the real
+text followed by 7+ blank lines, a large visible gap. Confirmed via raw XML inspection: the row's actual
+`.text` was `'PRÉSENTATION DES COÛTS...\n\n\n\n\n\n\n'`. Fixed in the merge loop
+(`worksheet_to_docx`): record the anchor's own paragraph count *before* merging, trim back to exactly
+that after — not just "keep the first paragraph", since a cell with a genuine embedded `\n` in its source
+value legitimately has more than one paragraph of its own and has to survive the trim.
+
+**2. Wide sheets crushed columns into letter-by-letter wrapping.** Word's default "AutoFit to Contents"
+only loosely respects per-cell width hints — on an 18-column real sheet, headers like "Autorisations
+d'Engagement" got crushed into single-character-wide columns, wrapping mid-word. Fixing column widths
+alone (locking `table.autofit = False` and setting explicit widths that sum to the page's usable width)
+wasn't enough — a normal ~11pt font still doesn't fit 18 columns of real content on one landscape page.
+Rotating just the long headers 90° was tried and abandoned: it doesn't scale to what the user actually
+wanted, and it kept misfiring on merged banner/section-title rows that coincidentally matched the same
+"bold + wrapped + long text" shape as a real column header (fixed once with a "never rotate a merged
+cell" rule, then dropped entirely). The actual fix (`_compute_fit_to_page`): mirror Excel's own "Fit to
+page width" print scaling — shrink column widths *and* font size together by one uniform factor, floored
+at 6pt so it never goes unreadable. On this real sheet the floor is what actually gets hit (18 columns is
+genuinely a lot); headers now wrap at word boundaries ("Autorisations" / "d'Engagement") instead of mid-word.
+
+**3. A cosmetic Excel format character was read as real currency.** `_format_number()` treated any `€`
+appearing anywhere in a cell's number format as "this is currency" and prefixed every value with it. This
+sheet's actual format, `_-* #,##0\ _€_-`, is a French accounting style for a *plain whole number* — the
+`_€` is Excel's "reserve blank space the width of this character, don't display it" spacer escape, used
+purely so the column visually lines up with real currency columns next to it. Fixed by stripping
+`_x`/`\x`/`*x` spacer-escapes (`_NUMBER_FORMAT_SPACER_RE`) before checking for a currency symbol.
+
+**4. Formula cells showed nothing — a persistence bug, not a Word-export bug.** The user reported formula
+values missing entirely from the export. Root cause traced to `worksheet_service.apply_edits()`, not
+`word_exporter.py`: it loads the workbook with `data_only=False` (needed to keep formula *text* intact
+for editing) and saves via plain `workbook.save()`. openpyxl has no way to hold a formula's cached result
+in that mode at all — a workbook loaded that way never has it in memory in the first place — so **any**
+edit through the app silently strips every formula cell's cached value **workbook-wide**, not just the
+cell actually touched. Confirmed live: `D9`'s formula (`='Sous Programme 2'!C9`) was intact, its cached
+value was `None`. The live editor never showed this because Univer has its own client-side formula
+engine and recalculates independently from the (never-damaged) formula text — it doesn't depend on the
+backend's cached value at all; only server-side consumers like the Word exporter do.
+
+- **Fix (`excel_io.save_workbook_preserving_formula_cache`)**: before every edit-save, snapshot each
+  formula cell's current cached value (a `data_only=True` read of the file as it stands *before* this
+  edit, reusing the shared read cache), save normally, then patch those values back into the *saved*
+  file's raw XML (an `.xlsx` is a zip of XML parts — openpyxl's writer has no concept of "formula plus
+  cached result" together, so this can only be done by editing the saved XML directly). The cell(s) this
+  specific edit touched are excluded from restoration — reapplying a formula cell's *old* value would be
+  wrong if the edit just changed that formula to something else. Wired into `apply_edits()`; `sync_service.py`
+  and `child_sheet_service.py` were not touched (see the unfixed issue below).
+  - Real gotcha hit while implementing: openpyxl's own writer emits an *empty* `<v></v>` placeholder for
+    a formula cell it never computed, not no `<v>` at all — the patch has to reuse/refill that element,
+    not skip cells that already have one.
+  - Real gotcha #2: openpyxl's worksheet `Target` in `workbook.xml.rels` can be absolute
+    (`/xl/worksheets/sheet1.xml`) or relative (`worksheets/sheet1.xml`) depending on the part — confirmed
+    openpyxl uses the absolute form for worksheets specifically.
+  - **This only stops *future* loss.** It can't retroactively restore a value that's already gone — a
+    workbook edited before this fix exists still has empty caches for whatever formulas existed at that
+    time. The only way to repair an already-damaged file is to open it in a real spreadsheet application
+    (recalculates on open) and save it there once; from then on, edits through this app preserve it.
+- **Safety net (`_cell_display_value` in `word_exporter.py`)**: when a formula cell's cached value is
+  still missing regardless (an already-damaged file, or a value the edit's own formula genuinely
+  invalidated), fall back to showing the raw formula text (`='Sous Programme 2'!C9`) instead of a blank
+  cell. Requires a *second* worksheet load (`ws_formulas`, `data_only=False`) passed alongside the normal
+  one — `conversion_service.convert_worksheet()` now loads both. Also surfaced a second, sharper bug
+  while wiring this in: `used_range()` was being computed from the *values* view, where a cache-less
+  formula cell has `.value is None` and (usually) no other formatting to flag it as real content — so
+  `cell_has_signal()` misses it entirely, and the whole row/column it's in could fall outside the
+  exported table's bounds, not just render blank inside it. Fixed by computing `used_range()` from the
+  formulas view when one is available (a formula cell's `.value` there is always its non-None formula
+  text, regardless of cache state) — matches what `worksheet_service.py`'s JSON read path already did
+  correctly.
+
+**Known, deliberately unfixed while investigating the above**: `sync_child_sheet()` and
+`create_child_sheet()` (`sync_service.py`, `child_sheet_service.py`) both load the **entire workbook**
+with `data_only=True` and then save it back. Confirmed via an isolated test: this doesn't just lose the
+cached *value* the way `apply_edits()` did — a workbook loaded `data_only=True` never holds the formula
+*text* in memory at all, so saving it converts every formula cell in the whole file into a frozen,
+hardcoded number, permanently. Since it loads the whole workbook (not just the sheet being synced/copied
+from), creating or syncing a single child sheet would silently destroy every cross-sheet formula anywhere
+in the file. Not yet fixed — child-sheet creation/sync hasn't been used on any real workbook yet (per the
+user, it's the next feature up), so nothing has actually been lost by this so far, but it needs the same
+category of fix (or a different one — these two don't need to preserve formulas *in the saved file*
+otherwise, only avoid destroying them) before that feature is exercised for real.
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running

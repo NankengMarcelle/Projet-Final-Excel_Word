@@ -28,9 +28,18 @@ def convert_worksheet(
     # conversion; for a real multi-sheet workbook where one sheet has inflated declared
     # dimensions (see used_range()'s own docstring), that meant paying to fully parse a
     # 277,200-cell sheet just to convert a completely different, small one.
-    wb = excel_io.load_workbook_cached(Path(workbook.storage_path), data_only=True)
+    storage_path = Path(workbook.storage_path)
+    wb = excel_io.load_workbook_cached(storage_path, data_only=True)
     ws = wb[worksheet.name]
-    word_exporter.worksheet_to_docx(ws, output_path)
+    # Second, separate load so a formula cell whose cached value was lost (see
+    # excel_io.save_workbook_preserving_formula_cache's own docstring for how that happens)
+    # can still show its formula instead of going silently blank — data_only=True gives no
+    # way to see that a cell was ever a formula once its cache is gone. Also cached: this is
+    # the exact same (path, data_only=False) load read_worksheet_data already does for the
+    # editor, so it's very often already warm.
+    wb_formulas = excel_io.load_workbook_cached(storage_path, data_only=False)
+    ws_formulas = wb_formulas[worksheet.name]
+    word_exporter.worksheet_to_docx(ws, output_path, ws_formulas=ws_formulas)
 
     conversion = Conversion(
         id=conversion_id, worksheet_id=worksheet.id, requested_by_id=requested_by_id, status="completed"
