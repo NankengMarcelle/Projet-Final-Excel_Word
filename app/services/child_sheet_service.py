@@ -43,29 +43,37 @@ def create_child_sheet(
     filter_criteria: dict,
 ) -> tuple[Worksheet, SheetRelationship]:
     path = Path(workbook.storage_path)
-    # Read with calculated values (data_only=True): the child sheet is a plain
-    # data copy, not a live formula copy, so filtering/derived data operates on
-    # actual values rather than formula text.
-    wb = excel_io.load_workbook(path, data_only=True)
+    # Read with calculated values (data_only=True): the child sheet is a plain data copy, not
+    # a live formula copy, so filtering/derived data operates on actual values rather than
+    # formula text. Cached and read-only — this view must never be the one saved back (see
+    # the data_only=False load below for why).
+    wb_values = excel_io.load_workbook_cached(path, data_only=True)
+    parent_ws_values = wb_values[parent_worksheet.name]
+    headers, rows = filter_engine.read_rows(parent_ws_values)
+
+    unknown_columns = [column for column in selected_columns if column not in headers]
+    if unknown_columns:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown columns for this sheet: {unknown_columns}",
+        )
+
+    filtered_rows = filter_engine.apply_filter(rows, filter_criteria)
+    data_rows = filter_engine.project_columns(filtered_rows, selected_columns)
+
+    # The actual mutation (creating + populating the new sheet) and save happen on a
+    # *separate* data_only=False load. A workbook loaded data_only=True never holds formula
+    # text for any sheet at all — confirmed live with an isolated test (see CLAUDE.md's "Word
+    # export, round two" section) — so saving that view back would silently convert every
+    # formula anywhere in the whole file into a frozen number, not just add the new sheet.
+    wb = excel_io.load_workbook(path, data_only=False)
     try:
-        parent_ws = wb[parent_worksheet.name]
-        headers, rows = filter_engine.read_rows(parent_ws)
-
-        unknown_columns = [column for column in selected_columns if column not in headers]
-        if unknown_columns:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown columns for this sheet: {unknown_columns}",
-            )
-
-        filtered_rows = filter_engine.apply_filter(rows, filter_criteria)
-        data_rows = filter_engine.project_columns(filtered_rows, selected_columns)
-
         sheet_name = _unique_sheet_name(wb.sheetnames, child_sheet_name)
         child_ws = wb.create_sheet(title=sheet_name)
         filter_engine.write_rows(child_ws, selected_columns, data_rows)
-
-        excel_io.save_workbook(wb, path)
+        # Not save_workbook(): this also restores every *other* formula cell's cached value,
+        # lost the same way apply_edits()'s save used to (see excel_io.py's own docstring).
+        excel_io.save_workbook_preserving_formula_cache(wb, path)
     finally:
         wb.close()
 

@@ -24,17 +24,27 @@ def sync_child_sheet(
     relationship: SheetRelationship,
 ) -> SheetRelationship:
     path = Path(workbook.storage_path)
-    wb = excel_io.load_workbook(path, data_only=True)
-    try:
-        parent_ws = wb[parent_worksheet.name]
-        headers, rows = filter_engine.read_rows(parent_ws)
-        filtered_rows = filter_engine.apply_filter(rows, relationship.filter_criteria)
-        data_rows = filter_engine.project_columns(filtered_rows, relationship.selected_columns)
+    # Read-only, cached: filtering needs real values, not formula text, to evaluate a
+    # condition like "Action equals X" — but this view must never be the one saved back (see
+    # the data_only=False load below for why).
+    wb_values = excel_io.load_workbook_cached(path, data_only=True)
+    parent_ws_values = wb_values[parent_worksheet.name]
+    headers, rows = filter_engine.read_rows(parent_ws_values)
+    filtered_rows = filter_engine.apply_filter(rows, relationship.filter_criteria)
+    data_rows = filter_engine.project_columns(filtered_rows, relationship.selected_columns)
 
+    # The actual mutation and save happen on a *separate* data_only=False load. A workbook
+    # loaded data_only=True never holds formula text for any sheet at all — confirmed live
+    # with an isolated test (see CLAUDE.md's "Word export, round two" section) — so saving
+    # that view back would silently convert every formula anywhere in the whole file into a
+    # frozen number, not just update the one child sheet being synced.
+    wb = excel_io.load_workbook(path, data_only=False)
+    try:
         child_ws = wb[child_worksheet.name]
         filter_engine.write_rows(child_ws, relationship.selected_columns, data_rows)
-
-        excel_io.save_workbook(wb, path)
+        # Not save_workbook(): this also restores every *other* formula cell's cached value,
+        # lost the same way apply_edits()'s save used to (see excel_io.py's own docstring).
+        excel_io.save_workbook_preserving_formula_cache(wb, path)
     finally:
         wb.close()
 

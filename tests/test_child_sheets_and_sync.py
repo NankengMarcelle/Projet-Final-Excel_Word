@@ -147,3 +147,76 @@ def test_sync_detects_outdated_and_updates_child(
     child_ws = wb["Active Employees"]
     rows = list(child_ws.iter_rows(values_only=True))
     assert set(rows[1:]) == {("Alice", 100), ("Bob", 200), ("Carol", 300)}
+
+
+def test_create_child_sheet_does_not_destroy_formulas_elsewhere_in_the_workbook(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Regression test for a real bug: create_child_sheet() used to load the *entire* workbook
+    # with data_only=True (needed to filter/project real values, not formula text) and save
+    # that same view back — but a workbook loaded that way never holds formula text for *any*
+    # sheet, so saving it converted every formula in the whole file into a frozen number. The
+    # sample workbook's own "Data" sheet has a real formula (C5, "=SUM(C2:C4)") that has
+    # nothing to do with the child sheet being created and must survive untouched.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            "child_sheet_name": "Active Employees",
+            "selected_columns": ["Name", "Amount"],
+            "filter_criteria": {
+                "logic": "AND",
+                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
+            },
+        },
+    )
+    assert response.status_code == 201
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    assert wb["Data"]["C5"].value == "=SUM(C2:C4)"
+
+
+def test_sync_child_sheet_does_not_destroy_formulas_elsewhere_in_the_workbook(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Same bug, same fix, different code path (sync_service.py, not child_sheet_service.py).
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    create_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            "child_sheet_name": "Active Employees",
+            "selected_columns": ["Name", "Amount"],
+            "filter_criteria": {
+                "logic": "AND",
+                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
+            },
+        },
+    )
+    relationship_id = create_response.json()["relationship"]["id"]
+
+    api_client.put(
+        f"/workbooks/{workbook_id}/worksheets/{parent_worksheet_id}",
+        headers=auth_headers,
+        json={"edits": [{"row": 3, "column": 2, "value": "Active"}]},
+    )
+    sync_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets/{relationship_id}/sync", headers=auth_headers
+    )
+    assert sync_response.status_code == 200
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    assert wb["Data"]["C5"].value == "=SUM(C2:C4)"

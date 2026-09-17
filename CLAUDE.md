@@ -402,17 +402,21 @@ backend's cached value at all; only server-side consumers like the Word exporter
   text, regardless of cache state) — matches what `worksheet_service.py`'s JSON read path already did
   correctly.
 
-**Known, deliberately unfixed while investigating the above**: `sync_child_sheet()` and
-`create_child_sheet()` (`sync_service.py`, `child_sheet_service.py`) both load the **entire workbook**
-with `data_only=True` and then save it back. Confirmed via an isolated test: this doesn't just lose the
-cached *value* the way `apply_edits()` did — a workbook loaded `data_only=True` never holds the formula
-*text* in memory at all, so saving it converts every formula cell in the whole file into a frozen,
-hardcoded number, permanently. Since it loads the whole workbook (not just the sheet being synced/copied
-from), creating or syncing a single child sheet would silently destroy every cross-sheet formula anywhere
-in the file. Not yet fixed — child-sheet creation/sync hasn't been used on any real workbook yet (per the
-user, it's the next feature up), so nothing has actually been lost by this so far, but it needs the same
-category of fix (or a different one — these two don't need to preserve formulas *in the saved file*
-otherwise, only avoid destroying them) before that feature is exercised for real.
+**Follow-up: the same class of bug in `sync_child_sheet()`/`create_child_sheet()`, fixed before ever
+being exercised on real data.** Both (`sync_service.py`, `child_sheet_service.py`) used to load the
+**entire workbook** with `data_only=True` and save it back. Confirmed via an isolated test before fixing:
+this doesn't just lose the cached *value* the way `apply_edits()` did — a workbook loaded `data_only=True`
+never holds the formula *text* in memory at all, so saving it converts every formula cell in the whole
+file into a frozen, hardcoded number, permanently. Since it loads the whole workbook (not just the sheet
+being synced/copied from), creating or syncing a single child sheet would have silently destroyed every
+cross-sheet formula anywhere in the file. Caught and fixed proactively — child-sheet creation/sync hadn't
+been used on any real workbook yet at the time, so nothing was actually lost — before it became the next
+feature worked on. Fixed the same way as `apply_edits()`: read filtering/values from a separate,
+read-only `data_only=True` view, but do the actual mutation (writing the child sheet's rows) and save on
+a `data_only=False` view, through `save_workbook_preserving_formula_cache()`, so every *other* sheet's
+formulas and cached values survive untouched. Regression-tested by adding an unrelated real formula
+(`=SUM(...)`) to the shared test fixture's own "Data" sheet and asserting it survives both
+`create_child_sheet` and `sync_child_sheet`.
 
 ## Frontend (`sheet_Flow_frontend/`)
 
