@@ -37,3 +37,13 @@ def get_by_id_in_workbook(db: Session, worksheet_id: uuid.UUID, workbook_id: uui
 
 def get_by_id(db: Session, worksheet_id: uuid.UUID) -> Worksheet | None:
     return db.query(Worksheet).filter(Worksheet.id == worksheet_id).first()
+
+
+def delete(db: Session, worksheet: Worksheet) -> None:
+    # sheet_relationships.parent_worksheet_id and .child_worksheet_id both have a real
+    # DB-level ON DELETE CASCADE (see alembic/versions/bf9ae7957e64...) — deleting a worksheet
+    # that's a parent or child in a relationship removes just that relationship row, never the
+    # *other* worksheet on the other end of it. That's exactly the "child sheet becomes a
+    # static, orphaned copy" behavior worksheet_service.delete_worksheet relies on, for free.
+    db.delete(worksheet)
+    db.commit()

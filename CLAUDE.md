@@ -494,6 +494,103 @@ same test *with* `workbook_write_lock()` held produced zero errors and all 20 up
 (`test_workbook_write_lock_serializes_concurrent_saves_without_corrupting_the_file`,
 `tests/test_excel_io.py`).
 
+### Insert/delete row and column: real structural edits, not a reconstructed cell-value diff
+
+Reported live: inserting or deleting a row/column via Univer's own right-click menu crashed the
+backend and then hammered it with the identical failing request forever. Root cause chain, each
+link confirmed against the real traceback/network log, not guessed:
+
+1. The autosave path never told the backend "a row was inserted" at all — it diffed cell *values*
+   before/after and sent a plain batch of `{row, column, value}` edits reconstructing the shift
+   (`src/univer/adapter.ts`'s `diffCellValues`, frontend side).
+2. Merged-cell ranges never move as part of that diff, so a shifted edit could land on a
+   coordinate that's a non-anchor cell of an *existing* merge in the real file. openpyxl
+   represents those as `MergedCell` objects with a read-only `.value` — `cell_editor.py`'s
+   `cell.value = edit["value"]` threw `AttributeError`, uncaught, 500ing the whole request.
+3. The frontend's autosave retried a failed save immediately and unconditionally, no backoff —
+   confirmed live, reproducing the crash fired 357+ identical failing requests in under a minute.
+
+**Fix: detect the real operation and apply it directly**, instead of inferring it from a diff.
+Univer's command service gives an exact, unambiguous signal for this — `sheet.mutation.insert-row`
+/ `remove-rows` / `insert-col` / `remove-col`, each firing with
+`{unitId, subUnitId, range: {startRow, endRow, startColumn, endColumn}}` (0-indexed; confirmed
+against the installed `@univerjs/sheets` bundle, not documented in Univer's public docs). The
+frontend listens for these via `univerAPI.onCommandExecuted` and sends the operation to a new
+`PATCH /workbooks/{id}/worksheets/{id}/structure` endpoint (`StructuralEditRequest`:
+`{operation, start_index, count}`, 1-indexed to match this backend's convention everywhere else)
+instead of folding it into the normal per-cell edit diff.
+
+`worksheet_service.apply_structural_edit` calls openpyxl's `insert_rows`/`delete_rows`/
+`insert_cols`/`delete_cols` directly, inside the same `workbook_write_lock` + formula-cache-aware
+save used everywhere else. Two more real openpyxl gaps surfaced only by testing against actual
+production data (not the simple test fixture, which never hit either):
+
+- **openpyxl's insert/delete never touches `ws.merged_cells` at all** (confirmed by reading
+  `Worksheet._move_cells`'s own source — it only moves `self._cells`). Fixed by unmerging every
+  range *before* the structural mutation runs, then re-merging at shifted coordinates afterward
+  (`apply_structural_edit`'s unmerge → shift → re-merge ordering) — doing it the other way around
+  hits stale coordinates and throws.
+- **openpyxl's own `ws.unmerge_cells()` unconditionally does `del self._cells[(row, col)]` for
+  every non-anchor cell in a merge**, but a merge read from a real Excel-authored file can cover a
+  cell that was never actually given a `MergedCell` placeholder (a genuinely empty cell inside the
+  merge, no XML `<c>` entry) — throws a bare `KeyError` (`KeyError: (116, 2)` on the real
+  workbook). Fixed with `_safe_unmerge()`, same logic with `.pop(..., None)` instead of `del`
+  (regression test constructs the missing-placeholder condition by hand, since a from-scratch
+  openpyxl fixture round-trips placeholders consistently and can't naturally reproduce it).
+
+**Child-sheet relationships cascade with the parent's edit**, per the user's own explicit call:
+"if the parent looses the data, the child should normally too" (for a deleted column) — a deleted
+column's index is dropped from `selected_columns` and any `filter_criteria` condition referencing
+it (`_remap_filter_criteria_columns`), surviving indices shift, and `header_start_row`/
+`header_end_row` shift or clamp the same way for row operations
+(`_shift_relationships_for_structural_edit`). Only the relationship's own stored positions change
+here — the child worksheet's file is untouched; bumping `content_updated_at` is what makes
+`sync_service.is_outdated()` flip to "Changes available", so the existing manual Synchronize
+button is what actually applies the drop, same as any other parent edit.
+
+**Frontend retry-loop bug fixed regardless of the above** (`useDebouncedAutosave.ts`): a failed
+save now only ever retries because a *newer* value diff was queued while it was in flight (the
+original intent) — never unconditionally on failure. Also fixed a second frontend-only race,
+caught live: Univer's `SheetValueChanged` can fire for the same structural user action *before*
+the new command handler runs, leaving a reconstructed-shift diff already sitting in the pending
+queue — the first version of the fix flushed that pending diff "to not lose a prior edit," which
+actually sent it straight to the old per-cell endpoint, defeating the whole point. Fixed by
+discarding pending instead of flushing it when a structural edit begins (accepted tradeoff: a
+genuine edit typed in the same sub-second window as a structural action is dropped, not sent).
+
+**Known, explicit scope boundary**: openpyxl does not rewrite formula text on insert/delete (a
+`=A5` reference doesn't become `=A6`, same sheet or cross-sheet) — a known openpyxl limitation,
+not something this closes. Real formula-reference rewriting would be its own, much larger project.
+
+Live-verified end-to-end against the exact real workbook that originally crashed: both row insert
+and column delete, reloaded afterward to confirm persistence — no crash, no corruption, merges
+intact. 75/75 backend tests pass (`tests/test_worksheet_structural_edits.py`).
+
+### Deleting a whole worksheet: was a silent no-op, now a real endpoint with an orphan warning
+
+Found by asking "what about deleting a sheet?" after the row/col work above — turned out
+deleting a sheet via Univer's own native tab menu was a pure client-side illusion: it vanished
+from the tab strip, but reappeared after reloading the workbook, since nothing told the backend
+at all (there was no worksheet-level delete endpoint, only whole-*workbook* deletion).
+
+New `DELETE /workbooks/{id}/worksheets/{id}` (`worksheet_service.delete_worksheet`) removes the
+sheet from the `.xlsx` file (rejecting with 400 if it's the workbook's only remaining sheet) and
+deletes the `Worksheet` row. **No custom cascade logic is needed for child-sheet relationships**:
+`sheet_relationships.parent_worksheet_id` and `.child_worksheet_id` both already have a real
+DB-level `ON DELETE CASCADE` (`alembic/versions/bf9ae7957e64_create_initial_tables.py`) — deleting
+a worksheet that's a parent removes just the relationship row referencing it, leaving the *child*
+worksheet completely untouched. That's exactly the product decision here, in the user's own
+words: "the child sheet is now orphan. The data in it is just static" — confirmed by all 4 new
+tests (`tests/test_worksheet_deletion.py`) passing on the first try once this was understood, no
+custom orphan-handling code required at all.
+
+The frontend half is the more involved part — see the "Frontend" section below for the
+`BeforeCommandExecute` interception and warning-modal flow that decides *when* to call this
+endpoint. Same known gap as row/col edits: deleting a sheet doesn't touch cross-sheet formulas
+referencing it, which break with no rewrite. Sibling gaps, not fixed here: Univer's native tab
+menu also exposes rename and tab reordering, both still silent no-ops for the same reason
+deleting used to be.
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running
@@ -811,3 +908,60 @@ The general lesson, worth remembering for any future change to this file: **a pl
 prove a layout is stable** — it proves the layout was fine at that one instant. Sampling a real DOM rect
 in a loop (`getBoundingClientRect()` every ~150ms for a few seconds) is what actually caught this, and is
 the right verification method for "is anything jittering/oscillating," not repeated single screenshots.
+
+### Structural row/column edits and whole-sheet deletion: driven by Univer's own command service
+
+Backend section above ("Insert/delete row and column" and "Deleting a whole worksheet") covers the
+persistence side; this is the frontend half — how `UniverSheetGrid.tsx` detects these operations
+and, for deletion, decides whether to interrupt Univer's own flow with an extra warning.
+
+**Detection**: rather than infer a structural edit from a before/after cell-value diff (the
+approach that used to corrupt merged cells), `UniverSheetGrid` listens to Univer's own command
+service directly via `univerAPI.onCommandExecuted`, matching on exact mutation ids
+(`sheet.mutation.insert-row`/`remove-rows`/`insert-col`/`remove-col`/`remove-sheet` — confirmed
+against the installed `@univerjs/sheets` bundle, not in Univer's public docs) instead of any
+higher-level, UI-facing command id. `onCommandExecuted` fires *after* the mutation already ran, so
+pulling `univerAPI.getActiveWorkbook()?.save()` inside the handler reflects the post-edit state —
+used to re-baseline the autosave diff (`useDebouncedAutosave.ts`'s `resolveStructuralEdit`)
+against real positions instead of stale pre-shift ones.
+
+**Delete needs an interception point *before* the deletion happens**, not just a notification
+after — to give the app's own "other sheets depend on this" warning a chance to actually cancel
+it. Univer's facade exposes exactly this:
+`univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (event) => { event.cancel = true })` —
+confirmed via `f-event.d.ts`'s own doc comment, a genuine cancelable pre-execution hook, distinct
+from `onCommandExecuted`. It fires after Univer's own native "are you sure?" confirm (a separate,
+higher-level UI command that only dispatches the mutation once accepted) but before the sheet is
+actually removed. `UniverSheetGrid`'s handler checks a new `onBeforeSheetDelete` prop (a
+*synchronous* predicate — this can only ever consult data already in hand, never fetch anything)
+and cancels via `event.cancel = true` when it returns false.
+
+Confirming the app's own warning modal (`EditorPage.tsx`) needs to *re-issue* the same delete,
+now approved — `UniverSheetGrid` was converted to `forwardRef` exposing exactly one imperative
+method, `confirmDeleteSheet(worksheetId)`, which calls `fWorkbook.deleteSheet(worksheetId)` (a
+real Facade method, `f-workbook.d.ts`) to dispatch the identical command a native tab-menu delete
+would. A one-shot `approvedDeletionsRef` Set inside `UniverSheetGrid` lets that specific re-issue
+bypass the `BeforeCommandExecute` check without asking again, without needing any state to leak
+back out of the component beyond the ref handle.
+
+The backend `DELETE` call itself lives in exactly one place regardless of which path led there —
+the `onCommandExecuted` handler for `remove-sheet`, fired uniformly whether the deletion went
+through immediately (no dependents, never intercepted) or via the approved re-issue.
+
+`EditorWorkbookReady` added its own `useQuery(["child-sheets", workbookId])` (same key
+`ChildSheetSyncPanel` already fetches independently — React Query dedupes by key, so this is not
+a second network request) purely so the synchronous `BeforeCommandExecute` check has the current
+parent/child relationship list in hand without needing an async fetch mid-interception.
+
+After a successful delete, invalidating `["workbooks", workbookId]` naturally changes
+`EditorPage`'s `worksheetListKey`, which remounts the whole `EditorWorkbook`/grid subtree — the
+same existing "sheet set changed" mechanism already used for child-sheet creation. This means a
+brief reload flicker follows deleting via the native tab menu even though Univer's own live model
+already reflected the deletion instantly; accepted as consistent with existing behavior rather
+than engineered around, given the mechanism already exists and is relied on elsewhere.
+
+**The retry-loop bug** fixed alongside all of this (`useDebouncedAutosave.ts`): a failed save used
+to retry immediately and unconditionally, no backoff — confirmed live, reproducing a structural-edit
+crash fired 357+ identical failing requests at the backend in under a minute. Now a failed save only
+stops; retrying only ever happens because a *newer* value diff was queued while the save was in
+flight, matching what the surrounding code already documented as the intent.

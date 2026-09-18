@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -68,3 +68,28 @@ class CellEdit(BaseModel):
 
 class WorksheetEditRequest(BaseModel):
     edits: list[CellEdit]
+
+
+class StructuralEditRequest(BaseModel):
+    # Mirrors Univer's own structural command names (see UniverSheetGrid.tsx's
+    # onCommandExecuted handler) — the frontend detects an insert/delete row/column via
+    # Univer's command service rather than inferring it from a cell-value diff, and forwards
+    # it here as its own operation instead of folding it into WorksheetEditRequest's per-cell
+    # edits (see CLAUDE.md's "insert/delete row-column" section for why the value-diff
+    # approach corrupts merged cells and can't represent this at all).
+    operation: Literal["insert_row", "remove_row", "insert_col", "remove_col"]
+    # 1-indexed, matching this backend's convention everywhere else (selected_columns,
+    # header_start_row/header_end_row, CellEdit.row/column) — the frontend converts Univer's
+    # own 0-indexed command range before sending.
+    start_index: int
+    count: int = 1
+
+
+class WorksheetColumn(BaseModel):
+    # 1-indexed column number — the real identifier for filtering/selection (see
+    # filter_engine.read_rows()'s docstring for why header text can't safely be used as one).
+    index: int
+    letter: str
+    # Display-only, built from the header block's resolved values for this column — never
+    # guaranteed unique across columns (e.g. "AE voté" can repeat under different year groups).
+    label: str

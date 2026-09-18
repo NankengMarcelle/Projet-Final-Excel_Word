@@ -24,3 +24,11 @@ def list_for_workbook(db: Session, workbook_id: uuid.UUID) -> list[SheetRelation
         .filter(Worksheet.workbook_id == workbook_id)
         .all()
     )
+
+
+def list_by_parent_worksheet_id(db: Session, parent_worksheet_id: uuid.UUID) -> list[SheetRelationship]:
+    return (
+        db.query(SheetRelationship)
+        .filter(SheetRelationship.parent_worksheet_id == parent_worksheet_id)
+        .all()
+    )
