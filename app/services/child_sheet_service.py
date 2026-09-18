@@ -10,6 +10,7 @@ from app.models.workbook import Workbook
 from app.models.worksheet import Worksheet
 from app.repositories import sheet_relationship_repository, worksheet_repository
 from app.spreadsheet import excel_io, filter_engine
+from app.spreadsheet.cell_signal import used_range
 
 
 def get_relationship_or_404(
@@ -51,7 +52,16 @@ def create_child_sheet(
     # the data_only=False load below for why).
     wb_values = excel_io.load_workbook_cached(path, data_only=True)
     parent_ws_values = wb_values[parent_worksheet.name]
-    header_grid, rows = filter_engine.read_rows(parent_ws_values, header_start_row, header_end_row)
+    # Bounds computed from a *formulas* view, cached and read-only here too (no lock needed
+    # yet — nothing is mutated until the write-lock block below) — see read_rows()'s own
+    # docstring for why a data_only=True view's used_range() can under-report a sheet with an
+    # uncalculated formula near its edge, which would otherwise desync the value read below
+    # from the style read (a different, data_only=False view of the same sheet) later on.
+    wb_formulas_cached = excel_io.load_workbook_cached(path, data_only=False)
+    bounds = used_range(wb_formulas_cached[parent_worksheet.name])
+    header_grid, rows = filter_engine.read_rows(
+        parent_ws_values, header_start_row, header_end_row, bounds=bounds
+    )
 
     max_col = len(header_grid[0]) if header_grid else 0
     unknown_columns = [column for column in selected_columns if column < 1 or column > max_col]
@@ -61,7 +71,8 @@ def create_child_sheet(
             detail=f"Unknown columns for this sheet: {unknown_columns}",
         )
 
-    filtered_rows = filter_engine.apply_filter(rows, filter_criteria)
+    filter_mask = filter_engine.compute_filter_mask(rows, filter_criteria)
+    filtered_rows = [row for row, keep in zip(rows, filter_mask) if keep]
     data_rows = filter_engine.project_columns(filtered_rows, selected_columns)
 
     # The actual mutation (creating + populating the new sheet) and save happen on a
@@ -77,9 +88,28 @@ def create_child_sheet(
     with excel_io.workbook_write_lock(path):
         wb = excel_io.load_workbook(path, data_only=False)
         try:
+            # Styles come from *this* same-workbook, data_only=False parent worksheet — not
+            # wb_values above (a separate cached instance) — so the copied Font/Fill/Border/
+            # Alignment objects belong to the same openpyxl Workbook the new sheet is being
+            # written into. Same `bounds` as the value read above, so row/column indices in
+            # header_style_grid/row_styles line up with header_grid/rows exactly.
+            parent_ws_formulas = wb[parent_worksheet.name]
+            header_style_grid, row_styles = filter_engine.read_row_styles(
+                parent_ws_formulas, header_start_row, header_end_row, bounds=bounds
+            )
+            filtered_row_styles = [style for style, keep in zip(row_styles, filter_mask) if keep]
+            data_style_rows = filter_engine.project_columns(filtered_row_styles, selected_columns)
+
             sheet_name = _unique_sheet_name(wb.sheetnames, child_sheet_name)
             child_ws = wb.create_sheet(title=sheet_name)
-            filter_engine.write_rows(child_ws, header_grid, selected_columns, data_rows)
+            filter_engine.write_rows(
+                child_ws,
+                header_grid,
+                selected_columns,
+                data_rows,
+                header_style_grid=header_style_grid,
+                data_style_rows=data_style_rows,
+            )
             # Not save_workbook(): this also restores every *other* formula cell's cached
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own
             # docstring).

@@ -92,6 +92,79 @@ def test_create_child_sheet_filters_and_projects_columns(
     assert set(rows[1:]) == {("Alice", 100), ("Carol", 300)}
 
 
+def test_create_child_sheet_copies_parent_formatting(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Regression test: write_rows() used to write plain values only, dropping every bit of the
+    # parent's formatting — the sample fixture's header row is bold with a yellow fill, and
+    # "Amount" (selected column 3, becomes column 2 in the child) has a #,##0.00 number format.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
+    )
+    assert response.status_code == 201
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    child_ws = wb["Active Employees"]
+
+    name_header = child_ws.cell(row=1, column=1)
+    assert name_header.value == "Name"
+    assert name_header.font.bold is True
+    assert name_header.fill.fgColor.rgb == "00FFFF00"
+
+    amount_header = child_ws.cell(row=1, column=2)
+    assert amount_header.value == "Amount"
+    assert amount_header.font.bold is True
+
+    # Row 2 is Alice (Amount=100); selected_columns=[1, 3] puts Amount in column 2.
+    amount_cell = child_ws.cell(row=2, column=2)
+    assert amount_cell.value == 100
+    assert amount_cell.number_format == "#,##0.00"
+
+
+def test_sync_child_sheet_copies_parent_formatting(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Same regression as test_create_child_sheet_copies_parent_formatting, but for the sync
+    # code path (sync_service.py) rather than creation.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    create_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
+    )
+    relationship_id = create_response.json()["relationship"]["id"]
+
+    # Force a real re-sync (not a no-op) by editing the parent first.
+    api_client.put(
+        f"/workbooks/{workbook_id}/worksheets/{parent_worksheet_id}",
+        headers=auth_headers,
+        json={"edits": [{"row": 3, "column": 2, "value": "Active"}]},
+    )
+    sync_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets/{relationship_id}/sync", headers=auth_headers
+    )
+    assert sync_response.status_code == 200
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    child_ws = wb["Active Employees"]
+    name_header = child_ws.cell(row=1, column=1)
+    assert name_header.font.bold is True
+    assert name_header.fill.fgColor.rgb == "00FFFF00"
+
+
 def test_create_child_sheet_rejects_out_of_range_column(
     api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
 ):
