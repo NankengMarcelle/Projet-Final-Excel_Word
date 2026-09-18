@@ -104,6 +104,14 @@ def create_child_sheet(
             )
             filtered_row_styles = [style for style, keep in zip(row_styles, filter_mask) if keep]
             data_style_rows = filter_engine.project_columns(filtered_row_styles, selected_columns)
+            # Remapped from *this* same-workbook parent worksheet's own merges (not
+            # parent_ws_values above) so the ranges line up with header_style_grid/row_styles,
+            # read from the same view just above — see compute_projected_merges()'s own
+            # docstring for why merges need remapping, not just value-resolution, to survive
+            # column selection/reordering and row filtering intact.
+            merges = filter_engine.compute_projected_merges(
+                parent_ws_formulas, header_start_row, header_end_row, selected_columns, filter_mask
+            )
 
             sheet_name = _unique_sheet_name(wb.sheetnames, child_sheet_name)
             child_ws = wb.create_sheet(title=sheet_name)
@@ -114,6 +122,7 @@ def create_child_sheet(
                 data_rows,
                 header_style_grid=header_style_grid,
                 data_style_rows=data_style_rows,
+                merges=merges,
             )
             # Not save_workbook(): this also restores every *other* formula cell's cached
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own

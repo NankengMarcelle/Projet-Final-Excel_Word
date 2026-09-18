@@ -76,6 +76,15 @@ def sync_child_sheet(
             )
             filtered_row_styles = [style for style, keep in zip(row_styles, filter_mask) if keep]
             data_style_rows = filter_engine.project_columns(filtered_row_styles, relationship.selected_columns)
+            # See child_sheet_service.create_child_sheet's matching comment for why merges are
+            # remapped from *this* same-workbook parent worksheet view.
+            merges = filter_engine.compute_projected_merges(
+                parent_ws_formulas,
+                relationship.header_start_row,
+                relationship.header_end_row,
+                relationship.selected_columns,
+                filter_mask,
+            )
 
             child_ws = wb[child_worksheet.name]
             filter_engine.write_rows(
@@ -85,6 +94,7 @@ def sync_child_sheet(
                 data_rows,
                 header_style_grid=header_style_grid,
                 data_style_rows=data_style_rows,
+                merges=merges,
             )
             # Not save_workbook(): this also restores every *other* formula cell's cached
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own

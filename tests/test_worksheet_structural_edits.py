@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app.services.worksheet_service import _safe_unmerge
+from app.spreadsheet.filter_engine import safe_unmerge
 
 
 def _upload_sample(api_client: TestClient, headers: dict, sample_xlsx_bytes: bytes) -> dict:
@@ -46,7 +46,7 @@ def test_safe_unmerge_tolerates_a_non_anchor_cell_with_no_placeholder(tmp_path):
     every non-anchor cell in a merge, but a merge read from a real Excel-authored file can
     cover a cell that never had a placeholder there at all (a genuinely empty cell within the
     merge that Excel itself never wrote an XML <c> entry for) — that throws a bare KeyError.
-    _safe_unmerge must tolerate this instead of crashing.
+    safe_unmerge must tolerate this instead of crashing.
     """
     wb = Workbook()
     ws = wb.active
@@ -56,7 +56,7 @@ def test_safe_unmerge_tolerates_a_non_anchor_cell_with_no_placeholder(tmp_path):
     # exactly as if it had never been written to _cells in the first place.
     del ws._cells[(1, 2)]
 
-    _safe_unmerge(ws, "A1:C1")
+    safe_unmerge(ws, "A1:C1")
 
     assert "A1:C1" not in ws.merged_cells
     assert ws["A1"].value == "Title"

@@ -5,7 +5,6 @@ from typing import Callable
 
 from fastapi import HTTPException, status
 from openpyxl.utils import get_column_letter, range_boundaries
-from openpyxl.worksheet.cell_range import CellRange
 from sqlalchemy.orm import Session
 
 from app.models.workbook import Workbook
@@ -204,12 +203,14 @@ def apply_structural_edit(
             # Excel-authored file can cover a cell that never had an XML <c> entry at all (a
             # genuinely empty cell inside the merge) — openpyxl's reader doesn't backfill a
             # MergedCell placeholder for those the way ws.merge_cells() would if called
-            # programmatically, so the naive delete throws a bare KeyError. _safe_unmerge below
-            # does the same thing openpyxl's own method does, just tolerating an entry that was
-            # never there to begin with.
+            # programmatically, so the naive delete throws a bare KeyError.
+            # filter_engine.safe_unmerge below does the same thing openpyxl's own method does,
+            # just tolerating an entry that was never there to begin with (shared with
+            # filter_engine.write_rows(), which needs the identical tolerance for the same
+            # reason when re-writing a child sheet's own merges on sync).
             old_merged_ranges = [str(cell_range) for cell_range in ws.merged_cells.ranges]
             for coord in old_merged_ranges:
-                _safe_unmerge(ws, coord)
+                filter_engine.safe_unmerge(ws, coord)
 
             if operation == "insert_row":
                 ws.insert_rows(start_index, count)
@@ -250,19 +251,6 @@ def _shift_bound_after_deletion(bound: int, deleted_from: int, deleted_to: int, 
     if bound > deleted_to:
         return bound - count
     return bound
-
-
-def _safe_unmerge(ws, coord: str) -> None:
-    """Same as ws.unmerge_cells(coord), except tolerant of a non-anchor cell that was never
-    actually present in ws._cells — see apply_structural_edit's own comment for why openpyxl's
-    own unmerge_cells() throws a bare KeyError on real Excel-authored files here."""
-    cell_range = CellRange(coord)
-    if cell_range.coord in ws.merged_cells:
-        ws.merged_cells.remove(cell_range)
-    cells = cell_range.cells
-    next(cells)  # skip the anchor cell, exactly like openpyxl's own unmerge_cells does
-    for row, col in cells:
-        ws._cells.pop((row, col), None)
 
 
 def _remerge_shifted_ranges(

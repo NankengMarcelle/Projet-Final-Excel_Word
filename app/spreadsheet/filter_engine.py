@@ -1,8 +1,26 @@
 from copy import copy
 
+from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.worksheet import Worksheet as OpenpyxlWorksheet
 
 from app.spreadsheet.cell_signal import used_range
+
+
+def safe_unmerge(ws: OpenpyxlWorksheet, coord: str) -> None:
+    """Same as ws.unmerge_cells(coord), except tolerant of a non-anchor cell that was never
+    actually present in ws._cells. openpyxl's own unmerge_cells() unconditionally does `del
+    self._cells[(row, col)]` for every non-anchor cell in the merge — but a merge read from a
+    real Excel-authored file can cover a cell that never had an XML <c> entry at all (a
+    genuinely empty cell inside the merge), which throws a bare KeyError. Confirmed live
+    against real workbook data; see worksheet_service.apply_structural_edit's own comment for
+    the original discovery."""
+    cell_range = CellRange(coord)
+    if cell_range.coord in ws.merged_cells:
+        ws.merged_cells.remove(cell_range)
+    cells = cell_range.cells
+    next(cells)  # skip the anchor cell, exactly like openpyxl's own unmerge_cells does
+    for row, col in cells:
+        ws._cells.pop((row, col), None)
 
 
 def _build_merge_lookup(ws: OpenpyxlWorksheet) -> dict[tuple[int, int], tuple[int, int]]:
@@ -146,6 +164,91 @@ def apply_value_overrides(
                 row[col] = overrides[key]
 
 
+def compute_projected_merges(
+    ws: OpenpyxlWorksheet,
+    header_start_row: int,
+    header_end_row: int,
+    selected_columns: list[int],
+    row_mask: list[bool],
+) -> list[tuple[int, int, int, int]]:
+    """Determines which of the parent sheet's merged ranges should be recreated in a
+    generated/synced child sheet, and where — remapped for both column selection/reordering
+    and row filtering, the same way a real merge would look if you manually deleted the same
+    rows/columns in Excel and dragged the survivors together. Ported from a colleague's
+    Fortune-sheet-based generator (`calculateProjectedSheet` in
+    Frontend_Net/Projet-Excel_Word/frontend/src/components/FortuneSheetEditor.jsx), whose
+    child sheets preserve merges correctly, adapted to this app's own column-identity model
+    (1-indexed column *number*, never header text — see read_rows()'s own docstring) and
+    header/data split.
+
+    Returns `(min_row, max_row, min_col, max_col)` tuples, all 1-indexed, already in the
+    *output* sheet's coordinate space — matching exactly what write_rows() is about to write,
+    so a caller just hands this straight to write_rows()'s `merges` param. A header merge's
+    rows are renumbered against `header_start_row` (the header block is never filtered, only
+    column-projected, so header row order/count never changes); a data merge's rows are
+    renumbered against however many of `row_mask`'s True rows preceded it.
+
+    A merge is dropped entirely if every one of its columns was excluded from
+    `selected_columns`, or every one of its rows was filtered out by `row_mask`. A merge that
+    survives but collapses to a single row *and* single column is also dropped — a 1x1 "merge"
+    isn't a merge, and openpyxl's own `ws.merge_cells()` rejects one anyway. A merge spanning
+    across the header/data boundary is dropped too (not expected in a real header block, and
+    read_rows()/write_rows() already treat the two blocks as structurally separate).
+
+    Note on non-contiguous survivors: if row filtering keeps some but not all of a vertical
+    merge's original rows (e.g. rows 1 and 3 of an original 3-row merge, row 2 filtered out),
+    this takes the min/max of the *surviving* rows' new positions as the merge's new span —
+    same approximation the colleague's own algorithm makes for its equivalent case, not a gap
+    introduced here.
+    """
+    col_position = {column: index for index, column in enumerate(selected_columns, start=1)}
+
+    header_row_count = header_end_row - header_start_row + 1
+    # Maps each ORIGINAL data row's 0-index (within row_mask, i.e. read_rows()'s own `rows`
+    # list) to its 1-indexed position among the *surviving* rows — i.e. where it lands in the
+    # output, right after the header block.
+    data_row_position: dict[int, int] = {}
+    next_position = 1
+    for original_index, keep in enumerate(row_mask):
+        if keep:
+            data_row_position[original_index] = next_position
+            next_position += 1
+
+    projected: list[tuple[int, int, int, int]] = []
+    for merged_range in ws.merged_cells.ranges:
+        min_row, max_row = merged_range.min_row, merged_range.max_row
+        min_col, max_col = merged_range.min_col, merged_range.max_col
+
+        surviving_cols = sorted(
+            col_position[col] for col in range(min_col, max_col + 1) if col in col_position
+        )
+        if not surviving_cols:
+            continue
+
+        if header_start_row <= min_row and max_row <= header_end_row:
+            new_min_row = min_row - header_start_row + 1
+            new_max_row = max_row - header_start_row + 1
+        elif min_row > header_end_row:
+            surviving_rows = sorted(
+                data_row_position[row - header_end_row - 1]
+                for row in range(min_row, max_row + 1)
+                if (row - header_end_row - 1) in data_row_position
+            )
+            if not surviving_rows:
+                continue
+            new_min_row = header_row_count + surviving_rows[0]
+            new_max_row = header_row_count + surviving_rows[-1]
+        else:
+            continue
+
+        new_min_col, new_max_col = surviving_cols[0], surviving_cols[-1]
+        if new_min_row == new_max_row and new_min_col == new_max_col:
+            continue
+        projected.append((new_min_row, new_max_row, new_min_col, new_max_col))
+
+    return projected
+
+
 def _evaluate_condition(condition: dict, row: dict[int, object]) -> bool:
     column = condition["column"]
     operator = condition["operator"]
@@ -233,6 +336,7 @@ def write_rows(
     *,
     header_style_grid: list[list] | None = None,
     data_style_rows: list[list] | None = None,
+    merges: list[tuple[int, int, int, int]] | None = None,
 ) -> None:
     """Overwrite a worksheet's content with the header block — every header row, projected
     down to just the selected columns in the given order — followed by the projected data
@@ -246,7 +350,19 @@ def write_rows(
     `selected_columns` here, same as the values are), `data_style_rows` is already projected
     (matching `data_rows`'s own shape). Omit both (the default) to write plain values only, as
     this always did before formatting support existed.
+
+    `merges` (see `compute_projected_merges()`) are `(min_row, max_row, min_col, max_col)`
+    1-indexed ranges, already in this call's own output coordinate space, applied via
+    `ws.merge_cells()` after every value/style is written. Any merges already on `ws` (from a
+    previous generation of this same child sheet, on a re-sync) are cleared first via
+    `safe_unmerge()` — needed because `delete_rows()` below wipes cell content but never
+    touches `ws.merged_cells` itself, so a stale range would otherwise linger and collide with
+    (or just misdescribe) freshly written data. Omit `merges` (the default) to write with no
+    merged cells at all, as this always did before merge-preservation existed.
     """
+    for coord in [str(cell_range) for cell_range in ws.merged_cells.ranges]:
+        safe_unmerge(ws, coord)
+
     if ws.max_row > 0:
         ws.delete_rows(1, ws.max_row)
 
@@ -266,3 +382,6 @@ def write_rows(
             if style_row is not None:
                 _copy_cell_style(target_cell, style_row[col_index - 1])
         row_index += 1
+
+    for min_row, max_row, min_col, max_col in merges or []:
+        ws.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
