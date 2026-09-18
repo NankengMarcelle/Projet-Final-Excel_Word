@@ -201,3 +201,24 @@ def test_edit_worksheet_can_clear_a_cell_value(
     # `_cell_has_signal`) — its absence here *is* the assertion that it
     # was actually cleared, not left at its old value.
     assert all(not (c["row"] == 2 and c["column"] == 2) for c in after["cells"])
+
+
+def test_list_worksheet_columns_labels_by_index_not_name(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    worksheet_id = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()["worksheets"][0]["id"]
+
+    response = api_client.get(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}/columns",
+        headers=auth_headers,
+        params={"header_start_row": 1, "header_end_row": 1},
+    )
+    assert response.status_code == 200
+    columns = response.json()
+    assert columns == [
+        {"index": 1, "letter": "A", "label": "Name"},
+        {"index": 2, "letter": "B", "label": "Status"},
+        {"index": 3, "letter": "C", "label": "Amount"},
+    ]

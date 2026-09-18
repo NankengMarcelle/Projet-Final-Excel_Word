@@ -20,6 +20,22 @@ def _download_workbook(api_client: TestClient, headers: dict, workbook_id: str):
     return load_workbook(io.BytesIO(response.content))
 
 
+# The sample fixture's "Data" sheet has a single-row header (Name, Status, Amount), so
+# header_start_row == header_end_row == 1 throughout these tests. Columns are 1-indexed —
+# Name=1, Status=2, Amount=3 — see filter_engine.read_rows()'s docstring for why column
+# identity is positional rather than by header text.
+_CHILD_SHEET_PAYLOAD = {
+    "child_sheet_name": "Active Employees",
+    "header_start_row": 1,
+    "header_end_row": 1,
+    "selected_columns": [1, 3],
+    "filter_criteria": {
+        "logic": "AND",
+        "conditions": [{"column": 2, "operator": "equals", "value": "Active"}],
+    },
+}
+
+
 def test_list_child_sheets_for_workbook(
     api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
 ):
@@ -36,15 +52,7 @@ def test_list_child_sheets_for_workbook(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Active Employees",
-            "selected_columns": ["Name", "Amount"],
-            "filter_criteria": {
-                "logic": "AND",
-                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
-            },
-        },
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
     )
     relationship_id = create_response.json()["relationship"]["id"]
 
@@ -66,21 +74,15 @@ def test_create_child_sheet_filters_and_projects_columns(
     response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Active Employees",
-            "selected_columns": ["Name", "Amount"],
-            "filter_criteria": {
-                "logic": "AND",
-                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
-            },
-        },
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
     )
     assert response.status_code == 201
     body = response.json()
     assert body["worksheet"]["name"] == "Active Employees"
     assert body["worksheet"]["sheet_type"] == "child"
-    assert body["relationship"]["selected_columns"] == ["Name", "Amount"]
+    assert body["relationship"]["selected_columns"] == [1, 3]
+    assert body["relationship"]["header_start_row"] == 1
+    assert body["relationship"]["header_end_row"] == 1
     assert body["relationship"]["last_synced_at"] is not None
 
     wb = _download_workbook(api_client, auth_headers, workbook_id)
@@ -88,6 +90,46 @@ def test_create_child_sheet_filters_and_projects_columns(
     rows = list(child_ws.iter_rows(values_only=True))
     assert rows[0] == ("Name", "Amount")
     assert set(rows[1:]) == {("Alice", 100), ("Carol", 300)}
+
+
+def test_create_child_sheet_rejects_out_of_range_column(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            **{**_CHILD_SHEET_PAYLOAD, "selected_columns": [1, 99]},
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_create_child_sheet_rejects_invalid_header_range(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            **{**_CHILD_SHEET_PAYLOAD, "header_start_row": 3, "header_end_row": 1},
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_sync_detects_outdated_and_updates_child(
@@ -102,15 +144,7 @@ def test_sync_detects_outdated_and_updates_child(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Active Employees",
-            "selected_columns": ["Name", "Amount"],
-            "filter_criteria": {
-                "logic": "AND",
-                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
-            },
-        },
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
     )
     relationship_id = create_response.json()["relationship"]["id"]
 
@@ -167,15 +201,7 @@ def test_create_child_sheet_does_not_destroy_formulas_elsewhere_in_the_workbook(
     response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Active Employees",
-            "selected_columns": ["Name", "Amount"],
-            "filter_criteria": {
-                "logic": "AND",
-                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
-            },
-        },
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
     )
     assert response.status_code == 201
 
@@ -196,15 +222,7 @@ def test_sync_child_sheet_does_not_destroy_formulas_elsewhere_in_the_workbook(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Active Employees",
-            "selected_columns": ["Name", "Amount"],
-            "filter_criteria": {
-                "logic": "AND",
-                "conditions": [{"column": "Status", "operator": "equals", "value": "Active"}],
-            },
-        },
+        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
     )
     relationship_id = create_response.json()["relationship"]["id"]
 

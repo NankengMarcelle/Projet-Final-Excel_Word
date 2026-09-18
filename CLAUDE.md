@@ -418,6 +418,82 @@ formulas and cached values survive untouched. Regression-tested by adding an unr
 (`=SUM(...)`) to the shared test fixture's own "Data" sheet and asserting it survives both
 `create_child_sheet` and `sync_child_sheet`.
 
+### Child sheets rebuilt for real multi-row-header matrices (`filter_engine.py`)
+
+The existing `create_child_sheet`/`sync_child_sheet` machinery predates this app's real target sheets —
+`filter_engine.read_rows()` hardcoded row 1 as *the* header and named every column by its header text
+(`dict(zip(headers, row))`). Neither assumption survives contact with a real matrix like `sp2 ppa
+traité`: its header spans rows 7-8, not row 1, and — confirmed live, not guessed — the same leaf label
+("AE voté") repeats under multiple different group headers ("Prévision 2026", "Prévision 2027", ...), so
+naming a column by its header text is a genuine collision, not just an edge case.
+
+Rebuilt around the same approach the original VBA tool (this feature's spec) already used successfully:
+**column identity is the 1-indexed column number, never header text.** `SheetRelationship` gained
+`header_start_row`/`header_end_row` columns (migration `fd27237322e0`, backfilled to `1` for any
+pre-existing row — this table only ever had test-fixture debris in it, confirmed by user email pattern
+before backfilling). `filter_engine.read_rows(ws, header_start_row, header_end_row)` now returns the full
+header block (one list per header row) plus data rows keyed by column number, and `write_rows()` writes
+the *whole* header block back out (not a single flattened row of composite names) — closer to "should
+almost be an exact copy" than the old single-row output.
+
+**Merged cells are resolved on read, not preserved structurally.** A merged cell's value only lives in
+its top-left anchor cell — reading any other cell in the merge directly gives a false blank. `read_rows()`
+resolves every cell (header or data) to its merge anchor's value, so a horizontally-merged group header
+("Prévision 2026" spanning several columns) correctly shows under each of them, and a vertically-merged
+data label (a "Structure" or section title spanning several task rows — this app's real matrices are full
+of these) correctly resolves for every row it covers, not just its own anchor row. Confirmed against the
+real sheet: `Col H`'s "Prévision 2026" group only propagates to its actual 3-column span, not a guessed
+4; the same leaf label collision anticipated above shows up for real (`Col K`: "Prévision 2026 - AE
+voté", `Col O`: "Prévision 2025 - Autorisations d'Engagement").
+
+New endpoint (`GET /worksheets/{id}/columns?header_start_row=&header_end_row=`,
+`worksheet_service.list_columns`) lets the frontend show a human a `{index, label}` pair — label built by
+joining each header row's resolved, non-blank value for that column (skipping immediate repeats, so a
+vertically-merged single-row header doesn't show up as "Action - Action") — while every payload
+downstream (`selected_columns`, a filter condition's `column`) carries only the index. Frontend
+(`ChildSheetModal.tsx`, `ColumnPicker.tsx`, `FilterGroupEditor.tsx`) updated to match: columns are
+`{index, letter, label}` objects, never bare strings.
+
+Verified end-to-end through the actual browser against the real workbook, not just unit tests: created a
+child sheet from `sp1 ppa traité` with `header_start_row=7`, `header_end_row=8`, producing a 140-row,
+2-column sheet with both header rows intact and a real vertically-merged section label ("I.1
+Développement...") correctly repeated across every task row it covers — then synced it successfully too.
+
+### Incident: a real workbook was corrupted by concurrent writes (`excel_io.py`)
+
+Found live, during the browser verification above: creating a second child sheet in quick succession
+triggered "endless" autosave retries (every `PUT .../worksheets/{id}` started returning 500), then
+"failed to load one or more worksheets" for the *entire* workbook. Root cause, from the actual traceback:
+`zipfile.BadZipFile: Bad magic number for central directory` — the workbook's `.xlsx` file itself was
+corrupted on disk.
+
+**Why**: nothing serialized a "load this file, mutate it, save it" cycle as one unit per workbook file.
+`apply_edits()`, `create_child_sheet()`, and `sync_child_sheet()` each independently load, mutate, and
+save the *same* file, and `save_workbook_preserving_formula_cache()`'s `_reinject_formula_cache()` step
+makes this worse by doing a *second* read-then-rewrite of the file right after openpyxl's own save. Two
+overlapping calls — an autosave PUT racing a child-sheet creation, both touching the same workbook —
+interleaved their writes and corrupted the zip's central directory. Confirmed by hand: every one of the
+corrupted file's 49 individual zip entries was still fully intact (every CRC32 matched), only the
+directory structure pointing to them was garbled — exactly what two concurrent zip writers to the same
+path produce, not random disk damage. Recovered the actual affected file by re-scanning its raw bytes for
+local file headers and rebuilding a fresh zip from the intact entries (no data was lost), then restored
+it in place.
+
+**Fix, two layers** (`excel_io.py`):
+1. `workbook_write_lock(path)` — a per-path `threading.Lock`, held by every caller for its *entire*
+   load-mutate-save cycle (not just the final save call). Serializes writers to the same workbook file;
+   different workbooks never contend with each other.
+2. `save_workbook()` and `_reinject_formula_cache()` both now write to a temp file and `os.replace()` it
+   into place, rather than writing straight to the final path. This is the second, independent layer: even
+   a reader that isn't holding the write lock can never observe a half-written file, only the complete old
+   one or the complete new one.
+
+Verified both the failure and the fix directly, not just reasoned about: a 20-thread concurrent
+load-mutate-save stress test *without* the lock lost 19 of 20 updates and threw `PermissionError`s; the
+same test *with* `workbook_write_lock()` held produced zero errors and all 20 updates landed correctly
+(`test_workbook_write_lock_serializes_concurrent_saves_without_corrupting_the_file`,
+`tests/test_excel_io.py`).
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running

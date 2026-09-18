@@ -45,6 +45,8 @@ def create_child_sheet(
         workbook=workbook,
         parent_worksheet=parent_worksheet,
         child_sheet_name=payload.child_sheet_name,
+        header_start_row=payload.header_start_row,
+        header_end_row=payload.header_end_row,
         selected_columns=payload.selected_columns,
         filter_criteria=payload.filter_criteria,
     )

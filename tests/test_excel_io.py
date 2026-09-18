@@ -1,3 +1,5 @@
+import threading
+
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
@@ -66,3 +68,45 @@ def test_does_not_reapply_a_stale_value_to_the_cell_that_was_actually_edited(tmp
     # No formula engine recomputed this, and the stale "10" (for the *old* formula) was
     # correctly withheld — None, not a wrong number, is the honest result here.
     assert values["Sheet2"]["A1"].value is None
+
+
+def test_workbook_write_lock_serializes_concurrent_saves_without_corrupting_the_file(tmp_path):
+    # Regression test for a real bug: a production workbook was corrupted live when two
+    # requests (an autosave PUT and a child-sheet creation) each ran their own
+    # load-mutate-save cycle for the same file concurrently, with nothing serializing "load,
+    # mutate, save" as one unit. Their writes interleaved and garbled the .xlsx's zip
+    # directory structure — confirmed by hand: all of the file's individual entries were
+    # still intact, only the central directory was corrupted, exactly what two overlapping
+    # zipfile writers to the same path produce. workbook_write_lock() closes that window.
+    path = tmp_path / "wb.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = 0
+    wb.save(path)
+    wb.close()
+
+    errors: list[Exception] = []
+
+    def bump():
+        try:
+            with excel_io.workbook_write_lock(path):
+                w = excel_io.load_workbook(path, data_only=False)
+                try:
+                    w.active["A1"] = (w.active["A1"].value or 0) + 1
+                    excel_io.save_workbook(w, path)
+                finally:
+                    w.close()
+        except Exception as exc:  # pragma: no cover - failure path, asserted on below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=bump) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    # The file must still be a valid, loadable workbook after 20 concurrent load-mutate-save
+    # cycles — and, since workbook_write_lock() serializes them, every single increment must
+    # have landed (a race would either corrupt the file outright or silently lose updates).
+    result = load_workbook(path)
+    assert result.active["A1"].value == 20

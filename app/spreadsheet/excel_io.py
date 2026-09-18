@@ -1,3 +1,4 @@
+import os
 import threading
 import uuid
 import zipfile
@@ -25,6 +26,33 @@ def save_bytes(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
+# --- Write safety ------------------------------------------------------------
+#
+# A real workbook file was corrupted live by exactly the race this guards against: two
+# requests (an autosave PUT and a child-sheet creation, both touching the same file) each ran
+# their own load-mutate-save cycle concurrently — nothing serialized "load this file, apply
+# changes, save it" as one atomic unit per workbook. Both writers ended up interleaving raw
+# writes to the same path, corrupting the .xlsx's zip directory structure (confirmed via
+# direct byte inspection — the file's local entries were all individually intact, only the
+# central directory was garbled, which is exactly what two overlapping zipfile writers to the
+# same path produces). Recovered that specific file by hand; this prevents it from recurring.
+#
+# `workbook_write_lock(path)` gives every caller that does a load-mutate-save cycle
+# (apply_edits, create_child_sheet, sync_child_sheet) a lock to hold for that *entire*
+# cycle — not just the final save() call — so a second writer for the same file waits its
+# turn instead of racing. Per-path, not global: edits to two different workbooks never
+# contend with each other. Never shrinks, but each entry is just a Lock object — negligible
+# memory even across a long server lifetime.
+_write_locks: dict[str, threading.Lock] = {}
+_write_locks_guard = threading.Lock()
+
+
+def workbook_write_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _write_locks_guard:
+        return _write_locks.setdefault(key, threading.Lock())
+
+
 def load_workbook(path: Path, *, data_only: bool = False) -> OpenpyxlWorkbook:
     """Load a workbook from disk.
 
@@ -36,8 +64,17 @@ def load_workbook(path: Path, *, data_only: bool = False) -> OpenpyxlWorkbook:
 
 
 def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
+    """Saves to a temp file in the same directory, then atomically replaces `path` with it.
+    A direct `workbook.save(path)` writes the zip straight to the final path — a reader (or
+    another writer) that touches the file mid-write sees a half-written, invalid zip. Saving
+    to a temp file first and using os.replace() (atomic on the same filesystem) means any
+    concurrent reader always sees either the complete old file or the complete new one, never
+    a partial one. This alone doesn't prevent two writers from racing each other — see
+    workbook_write_lock() for that — it only prevents a partial write from ever being visible."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(path)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    workbook.save(tmp_path)
+    os.replace(tmp_path, path)
 
 
 _XML_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -46,7 +83,11 @@ ET.register_namespace("", _XML_NS_MAIN)
 
 
 def save_workbook_preserving_formula_cache(
-    workbook: OpenpyxlWorkbook, path: Path, *, exclude: set[tuple[str, str]] = frozenset()
+    workbook: OpenpyxlWorkbook,
+    path: Path,
+    *,
+    exclude: set[tuple[str, str]] = frozenset(),
+    skip_sheets: set[str] = frozenset(),
 ) -> None:
     """Like save_workbook(), but restores each formula cell's last-known calculated value
     into the saved file afterward.
@@ -71,6 +112,14 @@ def save_workbook_preserving_formula_cache(
     specific edit actually touched. Their pre-edit cached value belongs to whatever they
     held *before* this edit and would be actively wrong to reapply now (most importantly, a
     formula cell whose formula text itself just changed to something else).
+
+    `skip_sheets` — sheet names to never restore cache for at all, coordinate-by-coordinate
+    exclusion isn't good enough for these. A structural edit (insert/delete row or column,
+    see worksheet_service.apply_structural_edit) shifts *every* cell's coordinate on the
+    edited sheet — reapplying an old cached value at "the same coordinate" would attach a
+    stale, wrong result to whatever formula shifted into that slot instead. Every other
+    sheet in the workbook is untouched by a structural edit to just one sheet, so their own
+    formula caches are still perfectly safe to restore normally.
     """
     cached_values: dict[tuple[str, str], object] = {}
     if path.exists():
@@ -80,7 +129,7 @@ def save_workbook_preserving_formula_cache(
         # `workbook` itself.
         snapshot = load_workbook_cached(path, data_only=True)
         for sheet_name in workbook.sheetnames:
-            if sheet_name not in snapshot.sheetnames:
+            if sheet_name not in snapshot.sheetnames or sheet_name in skip_sheets:
                 continue
             ws_formulas = workbook[sheet_name]
             ws_values = snapshot[sheet_name]
@@ -136,10 +185,21 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
 
     # .xlsx has no in-place-edit-one-member API — openpyxl's own writer rebuilds the whole
     # zip on every save too; this does the same, just keeping every other part byte-for-byte
-    # as openpyxl just wrote it.
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+    # as openpyxl just wrote it. Written to a temp file and swapped in atomically — same
+    # reasoning as save_workbook(): this function already reads the file once above (`archive
+    # = ZipFile(path, "r")`) and writes it again here, a second read-then-write on the same
+    # path in the same call — the exact shape of the race that corrupted a real file live: two
+    # overlapping writers each doing this same read-then-rewrite interleaved and produced a
+    # zip with an intact set of entries but a garbled central directory. The caller is
+    # expected to be holding workbook_write_lock(path) for this whole operation (see that
+    # function's docstring) — this atomic swap is the second, independent layer: even a reader
+    # that isn't part of that lock (there isn't one today, but a future one might exist) can
+    # never observe a half-written file.
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for info in infos:
             archive.writestr(info, contents[info.filename])
+    os.replace(tmp_path, path)
 
 
 def _map_sheet_names_to_xml_parts(workbook_xml: bytes, rels_xml: bytes) -> dict[str, str]:
