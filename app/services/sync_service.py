@@ -23,6 +23,7 @@ def sync_child_sheet(
     parent_worksheet: Worksheet,
     child_worksheet: Worksheet,
     relationship: SheetRelationship,
+    computed_values: list[tuple[int, int, object]] = (),
 ) -> SheetRelationship:
     path = Path(workbook.storage_path)
     # Read-only, cached: filtering needs real values, not formula text, to evaluate a
@@ -39,6 +40,13 @@ def sync_child_sheet(
     bounds = used_range(wb_formulas_cached[parent_worksheet.name])
     header_grid, rows = filter_engine.read_rows(
         parent_ws_values, relationship.header_start_row, relationship.header_end_row, bounds=bounds
+    )
+    # Patches in the frontend's live, Univer-recalculated value for any formula cell it sent —
+    # see filter_engine.apply_value_overrides()'s own docstring for why openpyxl's cache alone
+    # isn't enough.
+    overrides = {(row, column): value for row, column, value in computed_values}
+    filter_engine.apply_value_overrides(
+        header_grid, rows, relationship.header_start_row, relationship.header_end_row, overrides
     )
     filter_mask = filter_engine.compute_filter_mask(rows, relationship.filter_criteria)
     filtered_rows = [row for row, keep in zip(rows, filter_mask) if keep]

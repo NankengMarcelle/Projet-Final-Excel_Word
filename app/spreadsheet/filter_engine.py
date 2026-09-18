@@ -113,6 +113,39 @@ def read_row_styles(
     return header_style_grid, data_style_rows
 
 
+def apply_value_overrides(
+    header_grid: list[list],
+    rows: list[dict[int, object]],
+    header_start_row: int,
+    header_end_row: int,
+    overrides: dict[tuple[int, int], object],
+) -> None:
+    """Patches specific cells' resolved values in place, after read_rows() but before
+    filtering/projection — used to replace openpyxl's `data_only=True` cache for a formula
+    cell with its *live* value from Univer's own client-side formula engine, sent by the
+    frontend. openpyxl has no formula engine of its own; a formula's cached result can be
+    stale or (as confirmed live against a real workbook — every "Sous-total" row's SUM
+    formulas) entirely missing, even though the *live, open* spreadsheet computes and shows a
+    real number just fine. `overrides` keys are 1-indexed (row, column) tuples in the parent
+    sheet's own coordinate space, matching read_rows()'s own numbering — a no-op (`{}`) when
+    the caller has nothing to patch.
+    """
+    if not overrides:
+        return
+    for header_row_index, header_row in enumerate(header_grid):
+        actual_row = header_start_row + header_row_index
+        for col_index in range(len(header_row)):
+            key = (actual_row, col_index + 1)
+            if key in overrides:
+                header_row[col_index] = overrides[key]
+    for row_index, row in enumerate(rows):
+        actual_row = header_end_row + 1 + row_index
+        for col in row:
+            key = (actual_row, col)
+            if key in overrides:
+                row[col] = overrides[key]
+
+
 def _evaluate_condition(condition: dict, row: dict[int, object]) -> bool:
     column = condition["column"]
     operator = condition["operator"]

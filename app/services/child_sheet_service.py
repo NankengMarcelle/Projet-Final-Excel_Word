@@ -44,6 +44,7 @@ def create_child_sheet(
     header_end_row: int,
     selected_columns: list[int],
     filter_criteria: dict,
+    computed_values: list[tuple[int, int, object]] = (),
 ) -> tuple[Worksheet, SheetRelationship]:
     path = Path(workbook.storage_path)
     # Read with calculated values (data_only=True): the child sheet is a plain data copy, not
@@ -62,6 +63,10 @@ def create_child_sheet(
     header_grid, rows = filter_engine.read_rows(
         parent_ws_values, header_start_row, header_end_row, bounds=bounds
     )
+    # Patches in the frontend's live, Univer-recalculated value for any formula cell it sent —
+    # see apply_value_overrides()'s own docstring for why openpyxl's cache alone isn't enough.
+    overrides = {(row, column): value for row, column, value in computed_values}
+    filter_engine.apply_value_overrides(header_grid, rows, header_start_row, header_end_row, overrides)
 
     max_col = len(header_grid[0]) if header_grid else 0
     unknown_columns = [column for column in selected_columns if column < 1 or column > max_col]

@@ -1,9 +1,23 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.schemas.worksheet import WorksheetRead
+
+
+class ComputedCellValue(BaseModel):
+    """A single cell's *live, client-side recalculated* value, as Univer's own formula engine
+    currently sees it — openpyxl has no formula engine at all, so a formula cell's value here
+    can be stale or entirely missing (see filter_engine.apply_value_overrides()'s own
+    docstring). Sent by the frontend for whichever of the parent sheet's cells are formulas;
+    row/column are 1-indexed in the parent sheet's own coordinate space, matching every other
+    row/column convention in this app."""
+
+    row: int
+    column: int
+    value: Any = None
 
 
 class ChildSheetCreateRequest(BaseModel):
@@ -17,6 +31,7 @@ class ChildSheetCreateRequest(BaseModel):
     # for why column identity has to be positional on a real multi-row-header matrix sheet.
     selected_columns: list[int]
     filter_criteria: dict = {"logic": "AND", "conditions": []}
+    computed_values: list[ComputedCellValue] = []
 
     @model_validator(mode="after")
     def _validate_header_range(self) -> "ChildSheetCreateRequest":
@@ -25,6 +40,10 @@ class ChildSheetCreateRequest(BaseModel):
         if self.header_end_row < self.header_start_row:
             raise ValueError("header_end_row must be greater than or equal to header_start_row")
         return self
+
+
+class SyncChildSheetRequest(BaseModel):
+    computed_values: list[ComputedCellValue] = []
 
 
 class SheetRelationshipRead(BaseModel):

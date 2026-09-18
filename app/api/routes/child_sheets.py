@@ -11,6 +11,7 @@ from app.schemas.sheet_relationship import (
     ChildSheetCreateResponse,
     ChildSheetStatus,
     SheetRelationshipRead,
+    SyncChildSheetRequest,
 )
 from app.services import child_sheet_service, sync_service, workbook_service, worksheet_service
 
@@ -49,6 +50,7 @@ def create_child_sheet(
         header_end_row=payload.header_end_row,
         selected_columns=payload.selected_columns,
         filter_criteria=payload.filter_criteria,
+        computed_values=[(cv.row, cv.column, cv.value) for cv in payload.computed_values],
     )
     return ChildSheetCreateResponse(worksheet=child_worksheet, relationship=relationship)
 
@@ -76,6 +78,7 @@ def get_child_sheet_status(
 def sync_child_sheet(
     workbook_id: uuid.UUID,
     relationship_id: uuid.UUID,
+    payload: SyncChildSheetRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -87,10 +90,12 @@ def sync_child_sheet(
     )
     parent_worksheet = worksheet_repository.get_by_id(db, relationship.parent_worksheet_id)
     child_worksheet = worksheet_repository.get_by_id(db, relationship.child_worksheet_id)
+    computed_values = [(cv.row, cv.column, cv.value) for cv in payload.computed_values] if payload else []
     return sync_service.sync_child_sheet(
         db,
         workbook=workbook,
         parent_worksheet=parent_worksheet,
         child_worksheet=child_worksheet,
         relationship=relationship,
+        computed_values=computed_values,
     )

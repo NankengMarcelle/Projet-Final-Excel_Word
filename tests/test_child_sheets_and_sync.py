@@ -165,6 +165,82 @@ def test_sync_child_sheet_copies_parent_formatting(
     assert name_header.fill.fgColor.rgb == "00FFFF00"
 
 
+def test_create_child_sheet_applies_computed_value_overrides(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Regression test: the sample fixture's C5 formula (=SUM(C2:C4)) has no cached value at all
+    # (openpyxl never computed one) -- confirmed by test_read_worksheet_preserves_formatting_
+    # and_formulas. openpyxl has no formula engine, so the backend alone can never recover that
+    # number; computed_values is how the frontend patches in Univer's own live, client-side
+    # recalculated result instead. No filter here (keep every row) so C5 is actually included.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            "child_sheet_name": "All Rows",
+            "header_start_row": 1,
+            "header_end_row": 1,
+            # Just the Amount column — Name/Status (1, 2) are both part of the fixture's
+            # A5:B5 merge, whose anchor (A5) was never given a value, which would otherwise
+            # muddy this test with an unrelated, already-covered merge-resolution detail.
+            "selected_columns": [3],
+            "filter_criteria": {"logic": "AND", "conditions": []},
+            "computed_values": [{"row": 5, "column": 3, "value": 600}],
+        },
+    )
+    assert response.status_code == 201
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    child_ws = wb["All Rows"]
+    rows = list(child_ws.iter_rows(values_only=True))
+    assert (600,) in rows
+
+
+def test_sync_child_sheet_applies_computed_value_overrides(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    parent_worksheet_id = api_client.get(
+        f"/workbooks/{workbook_id}", headers=auth_headers
+    ).json()["worksheets"][0]["id"]
+
+    create_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=auth_headers,
+        json={
+            "parent_worksheet_id": parent_worksheet_id,
+            "child_sheet_name": "All Rows",
+            "header_start_row": 1,
+            "header_end_row": 1,
+            # Just the Amount column — see the create-path test's own comment for why 1/2
+            # would drag in an unrelated merge-resolution detail.
+            "selected_columns": [3],
+            "filter_criteria": {"logic": "AND", "conditions": []},
+        },
+    )
+    relationship_id = create_response.json()["relationship"]["id"]
+
+    sync_response = api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets/{relationship_id}/sync",
+        headers=auth_headers,
+        json={"computed_values": [{"row": 5, "column": 3, "value": 600}]},
+    )
+    assert sync_response.status_code == 200
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    child_ws = wb["All Rows"]
+    rows = list(child_ws.iter_rows(values_only=True))
+    assert (600,) in rows
+
+
 def test_create_child_sheet_rejects_out_of_range_column(
     api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
 ):
