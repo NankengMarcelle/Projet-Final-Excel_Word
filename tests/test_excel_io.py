@@ -1,9 +1,11 @@
 import threading
+from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
-from app.spreadsheet import excel_io
+from app.core.config import settings
+from app.spreadsheet import excel_io, object_storage
 
 
 def _seed_cached_formula_value(path, sheet_name: str, coordinate: str, value) -> None:
@@ -110,3 +112,97 @@ def test_workbook_write_lock_serializes_concurrent_saves_without_corrupting_the_
     # have landed (a race would either corrupt the file outright or silently lose updates).
     result = load_workbook(path)
     assert result.active["A1"].value == 20
+
+
+# --- Remote storage mirror (STORAGE_BACKEND="s3") ---------------------------
+#
+# These monkeypatch object_storage's download/upload/delete with in-memory fakes rather than
+# hitting a real S3-compatible endpoint — the point is confirming excel_io.py calls them at the
+# right moments, not exercising boto3 itself.
+
+
+def test_load_workbook_downloads_from_remote_on_local_cache_miss(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(settings, "STORAGE_ROOT", str(tmp_path))
+    downloads: list[str] = []
+
+    def fake_download(key: str, local_path: Path) -> None:
+        downloads.append(key)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        Workbook().save(local_path)
+
+    monkeypatch.setattr(object_storage, "download", fake_download)
+
+    missing_path = tmp_path / "workbooks" / "owner" / "wb.xlsx"
+    wb = excel_io.load_workbook(missing_path)
+    wb.close()
+
+    assert downloads == ["workbooks/owner/wb.xlsx"]
+
+
+def test_load_workbook_does_not_redownload_once_present_locally(tmp_path, monkeypatch):
+    # Single-process/single-instance assumption (see workbook_write_lock's docstring): once a
+    # file has been fetched once in this process's lifetime, every writer re-uploads
+    # immediately, so the local copy stays authoritative — no per-request network round trip.
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(settings, "STORAGE_ROOT", str(tmp_path))
+    path = tmp_path / "wb.xlsx"
+    wb = Workbook()
+    wb.save(path)
+    wb.close()
+
+    downloads: list[str] = []
+    monkeypatch.setattr(object_storage, "download", lambda key, local_path: downloads.append(key))
+
+    wb = excel_io.load_workbook(path)
+    wb.close()
+
+    assert downloads == []
+
+
+def test_save_workbook_uploads_to_remote(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(settings, "STORAGE_ROOT", str(tmp_path))
+    uploads: list[str] = []
+    monkeypatch.setattr(object_storage, "upload", lambda local_path, key: uploads.append(key))
+
+    path = tmp_path / "workbooks" / "owner" / "wb.xlsx"
+    wb = Workbook()
+    excel_io.save_workbook(wb, path)
+    wb.close()
+
+    assert uploads == ["workbooks/owner/wb.xlsx"]
+
+
+def test_delete_object_deletes_from_remote(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(settings, "STORAGE_ROOT", str(tmp_path))
+    path = tmp_path / "workbooks" / "owner" / "wb.xlsx"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"x")
+
+    deletes: list[str] = []
+    monkeypatch.setattr(object_storage, "delete", lambda key: deletes.append(key))
+
+    excel_io.delete_object(path)
+
+    assert not path.exists()
+    assert deletes == ["workbooks/owner/wb.xlsx"]
+
+
+def test_local_backend_never_touches_object_storage(tmp_path, monkeypatch):
+    # Regression guard: the default ("local") backend must be a complete no-op for every
+    # object_storage function, so existing local-dev behavior is untouched by this module.
+    calls: list[str] = []
+    monkeypatch.setattr(object_storage, "download", lambda *a, **k: calls.append("download"))
+    monkeypatch.setattr(object_storage, "upload", lambda *a, **k: calls.append("upload"))
+    monkeypatch.setattr(object_storage, "delete", lambda *a, **k: calls.append("delete"))
+
+    path = tmp_path / "wb.xlsx"
+    wb = Workbook()
+    excel_io.save_workbook(wb, path)
+    wb.close()
+    excel_io.load_workbook(path).close()
+    excel_io.delete_object(path)
+
+    assert calls == []

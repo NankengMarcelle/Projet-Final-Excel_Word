@@ -10,6 +10,7 @@ from app.models.user import User
 from app.repositories import worksheet_repository
 from app.schemas.conversion import ConversionCreateResponse, ConversionRead
 from app.services import conversion_service
+from app.spreadsheet import excel_io
 
 router = APIRouter(tags=["conversions"])
 
@@ -56,6 +57,13 @@ def download_conversion(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="This document has already been downloaded")
 
     path = Path(word_document.storage_path)
+    try:
+        excel_io.ensure_local(path)
+    except Exception:
+        # Covers both backends: locally, a missing file just stays missing; on the s3 backend,
+        # a failed download (object genuinely absent remotely) surfaces here as some
+        # botocore/OSError instead of path.exists() being false — same outcome either way.
+        pass
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found")
 

@@ -23,7 +23,7 @@ def import_workbook(db: Session, *, owner_id: uuid.UUID, upload: UploadFile) -> 
     try:
         opened = excel_io.load_workbook(storage_path)
     except Exception:
-        storage_path.unlink(missing_ok=True)
+        excel_io.delete_object(storage_path)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is not a valid .xlsx workbook"
         )
@@ -63,7 +63,7 @@ def list_workbooks(db: Session, *, owner_id: uuid.UUID) -> list[Workbook]:
 def delete_workbook(db: Session, *, workbook_id: uuid.UUID, owner_id: uuid.UUID) -> None:
     workbook = get_owned_workbook_or_404(db, workbook_id=workbook_id, owner_id=owner_id)
     workbook_repository.delete(db, workbook)
-    excel_io.workbook_storage_path(owner_id, workbook_id).unlink(missing_ok=True)
+    excel_io.delete_object(excel_io.workbook_storage_path(owner_id, workbook_id))
 
 
 def rename_workbook(

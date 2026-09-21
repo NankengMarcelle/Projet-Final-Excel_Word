@@ -40,6 +40,10 @@ def convert_worksheet(
     wb_formulas = excel_io.load_workbook_cached(storage_path, data_only=False)
     ws_formulas = wb_formulas[worksheet.name]
     word_exporter.worksheet_to_docx(ws, output_path, ws_formulas=ws_formulas)
+    # word_exporter writes output_path via python-docx's own Document.save(), bypassing every
+    # excel_io save helper (there's no openpyxl workbook to save here) — so it needs its own
+    # explicit mirror to remote storage, same as any other save in excel_io.py.
+    excel_io.upload_if_remote(output_path)
 
     conversion = Conversion(
         id=conversion_id, worksheet_id=worksheet.id, requested_by_id=requested_by_id, status="completed"
@@ -82,6 +86,6 @@ def finalize_download(db: Session, *, word_document_id: uuid.UUID) -> None:
     word_document = conversion_repository.get_word_document_by_id(db, word_document_id)
     if word_document is None:
         return
-    Path(word_document.storage_path).unlink(missing_ok=True)
+    excel_io.delete_object(Path(word_document.storage_path))
     word_document.downloaded_at = datetime.now(timezone.utc)
     db.commit()

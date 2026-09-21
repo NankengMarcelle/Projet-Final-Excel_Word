@@ -10,5 +10,6 @@ pyjwt
 bcrypt
 openpyxl
 python-docx
+boto3
 pytest
 httpx

@@ -10,6 +10,7 @@ from openpyxl import Workbook as OpenpyxlWorkbook
 from openpyxl import load_workbook as openpyxl_load_workbook
 
 from app.core.config import settings
+from app.spreadsheet import object_storage
 from app.spreadsheet.cell_signal import used_range
 
 
@@ -21,9 +22,52 @@ def conversion_storage_path(conversion_id: uuid.UUID) -> Path:
     return Path(settings.STORAGE_ROOT) / "conversions" / f"{conversion_id}.docx"
 
 
+# --- Remote storage mirror --------------------------------------------------
+#
+# When STORAGE_BACKEND is "s3", the local filesystem under STORAGE_ROOT is treated as a warm
+# cache, not the source of truth — Render's disk (and any other host's local filesystem) is
+# free to be wiped on every restart, since the real content lives in Supabase Storage
+# (S3-compatible). `_object_key` derives the S3 key from the same local Path every caller
+# already builds via workbook_storage_path()/conversion_storage_path(), so nothing about the
+# DB's `storage_path` column (still a local-path string) or any calling service needs to
+# change — this module is the only place that knows a remote store exists at all.
+def _object_key(path: Path) -> str:
+    return path.relative_to(settings.STORAGE_ROOT).as_posix()
+
+
+def _is_s3_backend() -> bool:
+    return settings.STORAGE_BACKEND == "s3"
+
+
+def ensure_local(path: Path) -> None:
+    """Guarantees `path` exists locally, fetching it from remote storage first if this process
+    hasn't touched it since its last cold start. A plain existence check, not an always-fetch:
+    the app runs single-process/single-instance (see workbook_write_lock's own docstring for
+    why that already matters), and every save below re-uploads immediately after writing
+    locally — so once a file has been downloaded once in this process's lifetime, the local
+    copy stays authoritative until the process restarts, with no per-request network round
+    trip. Safe to call even on the local backend (a no-op) or for a path that doesn't exist
+    anywhere yet (a fresh upload not yet saved) — download() will raise in that case, same as
+    a plain missing local file would."""
+    if _is_s3_backend() and not path.exists():
+        object_storage.download(_object_key(path), path)
+
+
+def upload_if_remote(path: Path) -> None:
+    if _is_s3_backend():
+        object_storage.upload(path, _object_key(path))
+
+
+def delete_object(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    if _is_s3_backend():
+        object_storage.delete(_object_key(path))
+
+
 def save_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+    upload_if_remote(path)
 
 
 # --- Write safety ------------------------------------------------------------
@@ -43,6 +87,13 @@ def save_bytes(path: Path, content: bytes) -> None:
 # turn instead of racing. Per-path, not global: edits to two different workbooks never
 # contend with each other. Never shrinks, but each entry is just a Lock object — negligible
 # memory even across a long server lifetime.
+#
+# This is a pure in-process threading.Lock, so it's only correct because the app runs a
+# single uvicorn process with no multiple workers/instances (already a known limitation —
+# see CLAUDE.md). With STORAGE_BACKEND="s3", save_workbook()/_reinject_formula_cache() now
+# also upload to remote storage from inside this same critical section, so the existing
+# guarantee extends to "local save + remote upload" as one atomic-from-the-outside unit, not
+# just the local save.
 _write_locks: dict[str, threading.Lock] = {}
 _write_locks_guard = threading.Lock()
 
@@ -60,6 +111,7 @@ def load_workbook(path: Path, *, data_only: bool = False) -> OpenpyxlWorkbook:
     data_only=True gives Excel's last-calculated value instead, from a second
     load of the same file — openpyxl cannot return both from one load.
     """
+    ensure_local(path)
     return openpyxl_load_workbook(path, data_only=data_only)
 
 
@@ -75,6 +127,7 @@ def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     workbook.save(tmp_path)
     os.replace(tmp_path, path)
+    upload_if_remote(path)
 
 
 _XML_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -200,6 +253,11 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
         for info in infos:
             archive.writestr(info, contents[info.filename])
     os.replace(tmp_path, path)
+    # save_workbook() already uploaded once above (save_workbook_preserving_formula_cache calls
+    # it before this function) — this is a second, harmless redundant upload for the case where
+    # this function is the true last writer of the cycle. Both happen inside the caller's
+    # workbook_write_lock, so there's no interleaving risk, just one extra network call.
+    upload_if_remote(path)
 
 
 def _map_sheet_names_to_xml_parts(workbook_xml: bytes, rels_xml: bytes) -> dict[str, str]:

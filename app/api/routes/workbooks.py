@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
@@ -8,6 +9,7 @@ from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.workbook import WorkbookDetail, WorkbookRead, WorkbookUpdate
 from app.services import workbook_service
+from app.spreadsheet import excel_io
 
 router = APIRouter(prefix="/workbooks", tags=["workbooks"])
 
@@ -48,8 +50,13 @@ def download_workbook(
     workbook = workbook_service.get_owned_workbook_or_404(
         db, workbook_id=workbook_id, owner_id=current_user.id
     )
+    path = Path(workbook.storage_path)
+    try:
+        excel_io.ensure_local(path)
+    except Exception:
+        pass  # let FileResponse below produce its own not-found behavior, same as before this route knew about remote storage
     return FileResponse(
-        workbook.storage_path,
+        path,
         filename=workbook.filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
