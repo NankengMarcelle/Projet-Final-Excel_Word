@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.repositories import worksheet_repository
-from app.schemas.conversion import ConversionCreateResponse, ConversionRead
+from app.schemas.conversion import ConversionCreateResponse, ConversionRead, WordFileRead
 from app.services import conversion_service
 from app.spreadsheet import excel_io
 
@@ -30,6 +30,14 @@ def convert_worksheet(
     return ConversionCreateResponse(conversion=conversion, word_document=word_document)
 
 
+@router.get("/conversions", response_model=list[WordFileRead])
+def list_conversions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return conversion_service.list_word_files(db, owner_id=current_user.id)
+
+
 @router.get("/conversions/{conversion_id}", response_model=ConversionRead)
 def get_conversion(
     conversion_id: uuid.UUID,
@@ -39,6 +47,15 @@ def get_conversion(
     return conversion_service.get_owned_conversion_or_404(
         db, conversion_id=conversion_id, owner_id=current_user.id
     )
+
+
+@router.delete("/conversions/{conversion_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversion(
+    conversion_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    conversion_service.delete_conversion(db, conversion_id=conversion_id, owner_id=current_user.id)
 
 
 @router.get("/conversions/{conversion_id}/download")
@@ -53,9 +70,6 @@ def download_conversion(
     )
     word_document = conversion_service.get_word_document_or_404(db, conversion_id=conversion_id)
 
-    if word_document.downloaded_at is not None:
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail="This document has already been downloaded")
-
     path = Path(word_document.storage_path)
     try:
         excel_io.ensure_local(path)
@@ -67,7 +81,7 @@ def download_conversion(
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found")
 
-    background_tasks.add_task(conversion_service.finalize_download, db, word_document_id=word_document.id)
+    background_tasks.add_task(conversion_service.record_download, db, word_document_id=word_document.id)
     return FileResponse(
         path,
         filename=word_document.filename,

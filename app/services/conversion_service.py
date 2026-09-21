@@ -9,6 +9,7 @@ from app.models.conversion import Conversion
 from app.models.word_document import WordDocument
 from app.models.worksheet import Worksheet
 from app.repositories import conversion_repository, workbook_repository, worksheet_repository
+from app.schemas.conversion import WordFileRead
 from app.spreadsheet import excel_io, word_exporter
 
 
@@ -61,6 +62,26 @@ def convert_worksheet(
     return conversion, word_document
 
 
+def list_word_files(db: Session, *, owner_id: uuid.UUID) -> list[WordFileRead]:
+    conversions = conversion_repository.list_for_user(db, owner_id)
+    # word_document is created in the same call as the conversion (see convert_worksheet above)
+    # so it should never actually be missing — skipped defensively rather than raising, since a
+    # list endpoint shouldn't 500 the whole page over one malformed row.
+    return [
+        WordFileRead(
+            conversion_id=conversion.id,
+            filename=conversion.word_document.filename,
+            file_size_bytes=conversion.word_document.file_size_bytes,
+            downloaded_at=conversion.word_document.downloaded_at,
+            created_at=conversion.created_at,
+            worksheet_name=conversion.worksheet.name,
+            workbook_filename=conversion.worksheet.workbook.filename,
+        )
+        for conversion in conversions
+        if conversion.word_document is not None
+    ]
+
+
 def get_owned_conversion_or_404(db: Session, *, conversion_id: uuid.UUID, owner_id: uuid.UUID) -> Conversion:
     conversion = conversion_repository.get_by_id(db, conversion_id)
     if conversion is None:
@@ -81,11 +102,24 @@ def get_word_document_or_404(db: Session, *, conversion_id: uuid.UUID) -> WordDo
     return word_document
 
 
-def finalize_download(db: Session, *, word_document_id: uuid.UUID) -> None:
-    """Runs as a FastAPI BackgroundTask after the file has been streamed to the client."""
+def delete_conversion(db: Session, *, conversion_id: uuid.UUID, owner_id: uuid.UUID) -> None:
+    conversion = get_owned_conversion_or_404(db, conversion_id=conversion_id, owner_id=owner_id)
+    word_document = conversion_repository.get_word_document_by_conversion_id(db, conversion_id)
+    if word_document is not None:
+        excel_io.delete_object(Path(word_document.storage_path))
+    conversion_repository.delete(db, conversion)
+
+
+def record_download(db: Session, *, word_document_id: uuid.UUID) -> None:
+    """Runs as a FastAPI BackgroundTask after the file has been streamed to the client.
+
+    Converted Word documents are meant to stay available in the Word Files page indefinitely,
+    downloadable on demand as many times as needed — this used to delete the file from storage
+    after its first download (a one-shot design), which is exactly what broke that. Now it only
+    records the most recent download time; the file itself is never removed here.
+    """
     word_document = conversion_repository.get_word_document_by_id(db, word_document_id)
     if word_document is None:
         return
-    excel_io.delete_object(Path(word_document.storage_path))
     word_document.downloaded_at = datetime.now(timezone.utc)
     db.commit()
