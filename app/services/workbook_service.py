@@ -1,3 +1,4 @@
+import time
 import uuid
 
 from fastapi import HTTPException, UploadFile, status
@@ -10,6 +11,8 @@ from app.spreadsheet import excel_io
 
 
 def import_workbook(db: Session, *, owner_id: uuid.UUID, upload: UploadFile) -> Workbook:
+    # TEMPORARY: see worksheet_service.apply_edits' matching timer for context — remove together.
+    request_start = time.perf_counter()
     if not upload.filename or not upload.filename.lower().endswith(".xlsx"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Only .xlsx files are supported"
@@ -46,6 +49,7 @@ def import_workbook(db: Session, *, owner_id: uuid.UUID, upload: UploadFile) -> 
     ]
     worksheet_repository.bulk_create(db, worksheets)
     db.refresh(workbook)
+    print(f"[PERF] import_workbook: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return workbook
 
 

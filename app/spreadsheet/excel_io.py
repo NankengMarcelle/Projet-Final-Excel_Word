@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 import uuid
 import zipfile
 from collections import OrderedDict
@@ -11,7 +12,13 @@ from openpyxl import load_workbook as openpyxl_load_workbook
 
 from app.core.config import settings
 from app.spreadsheet import object_storage
-from app.spreadsheet.cell_signal import used_range
+
+# TEMPORARY diagnostic instrumentation for the live single-cell-edit latency investigation
+# (still open from Friday, now compounded by S3 round trips added by the Supabase migration).
+# Remove once the fix lands — see CLAUDE.md's "Autosave performance fix" section for the
+# original ~30s-per-edit diagnosis this is re-measuring against the live deployment.
+def _perf_log(label: str, seconds: float) -> None:
+    print(f"[PERF] {label}: {seconds:.3f}s", flush=True)
 
 
 def workbook_storage_path(owner_id: uuid.UUID, workbook_id: uuid.UUID) -> Path:
@@ -50,7 +57,9 @@ def ensure_local(path: Path) -> None:
     anywhere yet (a fresh upload not yet saved) — download() will raise in that case, same as
     a plain missing local file would."""
     if _is_s3_backend() and not path.exists():
+        start = time.perf_counter()
         object_storage.download(_object_key(path), path)
+        _perf_log("ensure_local: S3 download (cold-cache miss)", time.perf_counter() - start)
 
 
 def upload_if_remote(path: Path) -> None:
@@ -66,8 +75,12 @@ def delete_object(path: Path) -> None:
 
 def save_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    start = time.perf_counter()
     path.write_bytes(content)
+    _perf_log("save_bytes: local write", time.perf_counter() - start)
+    start = time.perf_counter()
     upload_if_remote(path)
+    _perf_log("save_bytes: S3 upload", time.perf_counter() - start)
 
 
 # --- Write safety ------------------------------------------------------------
@@ -112,7 +125,10 @@ def load_workbook(path: Path, *, data_only: bool = False) -> OpenpyxlWorkbook:
     load of the same file — openpyxl cannot return both from one load.
     """
     ensure_local(path)
-    return openpyxl_load_workbook(path, data_only=data_only)
+    start = time.perf_counter()
+    result = openpyxl_load_workbook(path, data_only=data_only)
+    _perf_log(f"load_workbook(data_only={data_only})", time.perf_counter() - start)
+    return result
 
 
 def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
@@ -125,9 +141,13 @@ def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
     workbook_write_lock() for that — it only prevents a partial write from ever being visible."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    start = time.perf_counter()
     workbook.save(tmp_path)
     os.replace(tmp_path, path)
+    _perf_log("save_workbook: local openpyxl write", time.perf_counter() - start)
+    start = time.perf_counter()
     upload_if_remote(path)
+    _perf_log("save_workbook: S3 upload", time.perf_counter() - start)
 
 
 _XML_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -173,32 +193,26 @@ def save_workbook_preserving_formula_cache(
     stale, wrong result to whatever formula shifted into that slot instead. Every other
     sheet in the workbook is untouched by a structural edit to just one sheet, so their own
     formula caches are still perfectly safe to restore normally.
+
+    The pre-edit snapshot this needs comes from `_read_cached_formula_values()`, a raw-XML
+    scan of the *old* on-disk file — not a second `load_workbook(data_only=True)` parse. That
+    used to be the dominant cost of every single-cell edit on a real large workbook (measured:
+    8.37s of a 16.26s total on a real 28-sheet production file) — openpyxl builds a full
+    `Cell` object (font, fill, border, alignment, number_format, the lot) for every declared
+    cell just so this loop could read two attributes off it and discard the rest. A raw XML
+    scan (mirroring `_reinject_formula_cache`'s own write-side technique on the same file
+    format) only ever looks at whether a `<c>` element has an `<f>` child, at a fraction of
+    the cost — no second openpyxl parse, no per-cell object construction for non-formula
+    cells, which are the vast majority.
     """
     cached_values: dict[tuple[str, str], object] = {}
     if path.exists():
-        # Reuses the shared read-only cache — the file's mtime hasn't changed yet (we haven't
-        # saved), so this is a cache hit whenever a recent read already parsed this exact
-        # file, not an extra full parse on top of the one apply_edits() already did to load
-        # `workbook` itself.
-        snapshot = load_workbook_cached(path, data_only=True)
-        for sheet_name in workbook.sheetnames:
-            if sheet_name not in snapshot.sheetnames or sheet_name in skip_sheets:
-                continue
-            ws_formulas = workbook[sheet_name]
-            ws_values = snapshot[sheet_name]
-            # Bounded by used_range(), not ws.max_row/max_column — see cell_signal.py's own
-            # docstring for why those declared dimensions can be dramatically inflated beyond
-            # any real content on a long-lived workbook.
-            max_row, max_col = used_range(ws_formulas)
-            for row in ws_formulas.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
-                for cell in row:
-                    if cell.data_type != "f":
-                        continue
-                    if (sheet_name, cell.coordinate) in exclude:
-                        continue
-                    value = ws_values.cell(row=cell.row, column=cell.column).value
-                    if value is not None:
-                        cached_values[(sheet_name, cell.coordinate)] = value
+        scan_start = time.perf_counter()
+        cached_values = _read_cached_formula_values(path, workbook.sheetnames, skip_sheets, exclude)
+        _perf_log(
+            "save_workbook_preserving_formula_cache: raw-XML formula-cell scan",
+            time.perf_counter() - scan_start,
+        )
 
     save_workbook(workbook, path)
 
@@ -206,11 +220,86 @@ def save_workbook_preserving_formula_cache(
         _reinject_formula_cache(path, cached_values)
 
 
+def _read_cached_formula_values(
+    path: Path,
+    sheet_names: list[str],
+    skip_sheets: set[str],
+    exclude: set[tuple[str, str]],
+) -> dict[tuple[str, str], object]:
+    """Raw-XML read-side counterpart to `_reinject_formula_cache`'s write-side patch, over the
+    *same* on-disk file (read here before this save overwrites it). Deliberately does not use
+    openpyxl at all: every declared cell in a real workbook would otherwise get built into a
+    full `Cell` object just so this could check two attributes and discard the rest — see
+    `save_workbook_preserving_formula_cache`'s own docstring for the measured cost of that.
+
+    Doesn't need `used_range()` the way the old openpyxl-based version did either — the XML
+    only ever contains `<c>` elements for cells with real content or formatting to begin with,
+    so there's no equivalent of openpyxl's own declared-dimensions-can-be-wildly-inflated
+    problem (see cell_signal.py) to bound against here.
+
+    A coordinate is included whether or not it's *still* a formula in the current in-memory
+    `workbook` (post-edit) — `_reinject_formula_cache`'s own `_patch_sheet_xml` already checks
+    that against the just-saved file before patching anything in, so a coordinate that stopped
+    being a formula as part of this edit is harmlessly dropped there instead of needing a
+    second check here.
+    """
+    with zipfile.ZipFile(path, "r") as archive:
+        contents = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    sheet_name_to_part = _map_sheet_names_to_xml_parts(
+        contents["xl/workbook.xml"], contents["xl/_rels/workbook.xml.rels"]
+    )
+
+    cached_values: dict[tuple[str, str], object] = {}
+    for sheet_name in sheet_names:
+        if sheet_name in skip_sheets:
+            continue
+        part_name = sheet_name_to_part.get(sheet_name)
+        if part_name is None or part_name not in contents:
+            continue
+        root = ET.fromstring(contents[part_name])
+        for row_el in root.iter(f"{{{_XML_NS_MAIN}}}row"):
+            for cell_el in row_el.findall(f"{{{_XML_NS_MAIN}}}c"):
+                if cell_el.find(f"{{{_XML_NS_MAIN}}}f") is None:
+                    continue  # not a formula cell
+                coordinate = cell_el.get("r")
+                if coordinate is None or (sheet_name, coordinate) in exclude:
+                    continue
+                v_el = cell_el.find(f"{{{_XML_NS_MAIN}}}v")
+                if v_el is None or not v_el.text:
+                    continue  # no cached result to preserve
+                value = _parse_cell_value(cell_el.get("t"), v_el.text)
+                if value is not None:
+                    cached_values[(sheet_name, coordinate)] = value
+    return cached_values
+
+
+def _parse_cell_value(cell_type: str | None, text: str) -> object:
+    """Mirrors _patch_sheet_xml's own write-side type conventions exactly (t="b" for boolean,
+    t="str" for a string result, absent/"n" for numeric) — deliberately narrow, matching that
+    function's own "skip rather than write something a reader can't parse" stance: t="s"
+    (shared string) never appears for a formula's own cached result in practice (shared
+    strings dedupe *static* text cells, not computed results — confirmed by _patch_sheet_xml
+    never having needed to handle it either), and any other/unrecognized type is skipped
+    rather than guessed at."""
+    if cell_type == "b":
+        return text == "1"
+    if cell_type in ("str", "e"):  # "e" = a cached error result, e.g. "#REF!" — plain text too
+        return text
+    if cell_type in (None, "n"):
+        try:
+            return int(text)
+        except ValueError:
+            return float(text)
+    return None
+
+
 def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], object]) -> None:
     """Patches the just-saved .xlsx's own XML directly — an .xlsx is just a zip of XML parts,
     and this is the only way to give a formula cell a cached value, since openpyxl's writer
     has no concept of "formula plus cached result" (see save_workbook_preserving_formula_cache
     for why)."""
+    start = time.perf_counter()
     values_by_sheet: dict[str, dict[str, object]] = {}
     for (sheet_name, coordinate), value in cached_values.items():
         values_by_sheet.setdefault(sheet_name, {})[coordinate] = value
@@ -234,6 +323,7 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
             changed = True
 
     if not changed:
+        _perf_log("_reinject_formula_cache: read+patch (no-op, no changed cells)", time.perf_counter() - start)
         return
 
     # .xlsx has no in-place-edit-one-member API — openpyxl's own writer rebuilds the whole
@@ -253,11 +343,14 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
         for info in infos:
             archive.writestr(info, contents[info.filename])
     os.replace(tmp_path, path)
+    _perf_log("_reinject_formula_cache: read+patch+rewrite zip", time.perf_counter() - start)
     # save_workbook() already uploaded once above (save_workbook_preserving_formula_cache calls
     # it before this function) — this is a second, harmless redundant upload for the case where
     # this function is the true last writer of the cycle. Both happen inside the caller's
     # workbook_write_lock, so there's no interleaving risk, just one extra network call.
+    start = time.perf_counter()
     upload_if_remote(path)
+    _perf_log("_reinject_formula_cache: S3 upload", time.perf_counter() - start)
 
 
 def _map_sheet_names_to_xml_parts(workbook_xml: bytes, rels_xml: bytes) -> dict[str, str]:

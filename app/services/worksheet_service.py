@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: u
 
 
 def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> WorksheetData:
+    # TEMPORARY: see apply_edits' matching timer for context — remove together.
+    request_start = time.perf_counter()
     path = Path(workbook.storage_path)
     # Two separate loads: one keeps formula text, the other gives Excel's last cached
     # calculated value — openpyxl cannot return both from a single load. Both go through the
@@ -84,7 +87,7 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
         index: dim.height for index, dim in ws_formulas.row_dimensions.items() if dim.height
     }
 
-    return WorksheetData(
+    result = WorksheetData(
         id=worksheet.id,
         name=worksheet.name,
         max_row=ws_formulas.max_row,
@@ -94,11 +97,16 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
         column_widths=column_widths,
         row_heights=row_heights,
     )
+    print(f"[PERF] read_worksheet_data: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
+    return result
 
 
 def apply_edits(
     db: Session, *, workbook: Workbook, worksheet: Worksheet, edits: list[dict]
 ) -> Worksheet:
+    # TEMPORARY: total end-to-end timer for the live latency investigation — see excel_io.py's
+    # _perf_log for the per-phase breakdown this should sum to. Remove both once diagnosed.
+    request_start = time.perf_counter()
     path = Path(workbook.storage_path)
     # Held for the whole load-mutate-save cycle, not just the save — two overlapping edits to
     # the same workbook (or an edit racing a child-sheet create/sync) corrupted a real file
@@ -124,6 +132,7 @@ def apply_edits(
     worksheet.content_updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(worksheet)
+    print(f"[PERF] apply_edits: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return worksheet
 
 
