@@ -1,5 +1,6 @@
 # Secrets — never commit real values (see .env.example for the template)
 .env
+.env.supabase-verify
 
 # Virtual environment
 venv/
