@@ -53,6 +53,21 @@ Tests hit the real local Postgres dev database (no test-DB isolation/fixtures ye
 number-formatted column, a merged cell, and a `=SUM(...)` formula) — reuse it for new tests rather than
 building another fixture workbook.
 
+**`.env` must always point at local Postgres + `STORAGE_BACKEND=local`, never the real Supabase
+project** — found live: during the Supabase storage/DB migration (see "Deploying" below), `.env` was
+temporarily pointed at the real Supabase Postgres + Storage bucket to manually verify the migration
+worked, and stayed that way afterward. Every `pytest` run in between silently created real test
+users/workbooks against **production**, since this project has no test-DB isolation to begin with (see
+above) — the same lack of isolation that's fine against a disposable local dev DB is actively dangerous
+against the real one. `.env.supabase-verify` (gitignored, never auto-loaded — pydantic-settings only
+reads `.env`) holds the real Supabase values purely as a saved reference, so they don't need
+re-fetching from the dashboard each time. To actually test against real Supabase for a one-off manual
+verification pass, override the handful of relevant keys as real shell environment variables for that
+single command instead of editing `.env` — pydantic-settings gives real env vars priority over the
+`.env` file, so `.env` itself never needs to change either way. See `.env.supabase-verify`'s own header
+comment for the exact PowerShell one-liner. Close that shell (or unset the vars) afterward so a later
+`pytest` run in the same terminal doesn't inherit them by accident.
+
 ### Migrations
 
 ```bash
