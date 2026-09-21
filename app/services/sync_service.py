@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -6,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.models.sheet_relationship import SheetRelationship
 from app.models.workbook import Workbook
 from app.models.worksheet import Worksheet
-from app.spreadsheet import excel_io, filter_engine
-from app.spreadsheet.cell_signal import used_range
+from app.repositories import worksheet_repository
+from app.spreadsheet import child_sheet_combiner, excel_io, filter_engine
 
 
 def is_outdated(parent_worksheet: Worksheet, relationship: SheetRelationship) -> bool:
@@ -16,85 +17,73 @@ def is_outdated(parent_worksheet: Worksheet, relationship: SheetRelationship) ->
     return parent_worksheet.content_updated_at > relationship.last_synced_at
 
 
+def is_any_outdated(pairs: list[tuple[Worksheet, SheetRelationship]]) -> bool:
+    """A child sheet built from multiple sources is outdated if *any* contributing parent has
+    changed since that specific relationship's own last sync — matches the "sync always fully
+    regenerates from every current source" model: any one stale source means the whole combined
+    output needs regenerating, not just that one source's share of it."""
+    return any(is_outdated(parent, relationship) for parent, relationship in pairs)
+
+
 def sync_child_sheet(
     db: Session,
     *,
     workbook: Workbook,
-    parent_worksheet: Worksheet,
     child_worksheet: Worksheet,
-    relationship: SheetRelationship,
-    computed_values: list[tuple[int, int, object]] = (),
-) -> SheetRelationship:
-    path = Path(workbook.storage_path)
-    # Read-only, cached: filtering needs real values, not formula text, to evaluate a
-    # condition like "Action equals X" — but this view must never be the one saved back (see
-    # the data_only=False load below for why).
-    wb_values = excel_io.load_workbook_cached(path, data_only=True)
-    parent_ws_values = wb_values[parent_worksheet.name]
-    # Bounds computed from a *formulas* view, cached and read-only here too (no lock needed
-    # yet) — see filter_engine.read_rows()'s own docstring for why a data_only=True view's
-    # used_range() can under-report a sheet with an uncalculated formula near its edge, which
-    # would otherwise desync this value read from the style read (a different, data_only=False
-    # view of the same sheet) later on.
-    wb_formulas_cached = excel_io.load_workbook_cached(path, data_only=False)
-    bounds = used_range(wb_formulas_cached[parent_worksheet.name])
-    header_grid, rows = filter_engine.read_rows(
-        parent_ws_values, relationship.header_start_row, relationship.header_end_row, bounds=bounds
-    )
-    # Patches in the frontend's live, Univer-recalculated value for any formula cell it sent —
-    # see filter_engine.apply_value_overrides()'s own docstring for why openpyxl's cache alone
-    # isn't enough.
-    overrides = {(row, column): value for row, column, value in computed_values}
-    filter_engine.apply_value_overrides(
-        header_grid, rows, relationship.header_start_row, relationship.header_end_row, overrides
-    )
-    filter_mask = filter_engine.compute_filter_mask(rows, relationship.filter_criteria)
-    filtered_rows = [row for row, keep in zip(rows, filter_mask) if keep]
-    data_rows = filter_engine.project_columns(filtered_rows, relationship.selected_columns)
+    relationships: list[SheetRelationship],
+    computed_values_by_parent: dict[uuid.UUID, list[tuple[int, int, object]]] = {},
+) -> list[SheetRelationship]:
+    """Fully regenerates a child sheet's content from *all* of its current sources — the same
+    "read every source fresh, combine, overwrite" pipeline create_child_sheet uses, just against
+    an existing child worksheet instead of a new one. Not incremental: even if only one source's
+    parent actually changed, every source is re-read and the whole combined output is rewritten,
+    matching this app's existing single-source sync behavior (see the old is_outdated()/sync
+    docstrings this replaces) extended to N sources instead of one.
 
-    # The actual mutation and save happen on a *separate* data_only=False load. A workbook
-    # loaded data_only=True never holds formula text for any sheet at all — confirmed live
-    # with an isolated test (see CLAUDE.md's "Word export, round two" section) — so saving
-    # that view back would silently convert every formula anywhere in the whole file into a
-    # frozen number, not just update the one child sheet being synced.
+    `computed_values_by_parent` maps each contributing parent worksheet's id to that parent's own
+    live, Univer-recalculated values (see child_sheet_combiner.SourceSpec's own docstring for why
+    openpyxl's cache alone isn't enough) — one entry per source that actually has any, missing
+    entries default to no overrides.
+    """
+    path = Path(workbook.storage_path)
+    # Read-only, cached: filtering needs real values, not formula text — this view must never
+    # be the one saved back (see the data_only=False load below for why).
+    wb_values = excel_io.load_workbook_cached(path, data_only=True)
+
+    sources = []
+    for relationship in relationships:
+        parent_worksheet = worksheet_repository.get_by_id(db, relationship.parent_worksheet_id)
+        sources.append(
+            child_sheet_combiner.SourceSpec(
+                parent_worksheet=parent_worksheet,
+                header_start_row=relationship.header_start_row,
+                header_end_row=relationship.header_end_row,
+                selected_columns=relationship.selected_columns,
+                filter_criteria=relationship.filter_criteria,
+                computed_values=computed_values_by_parent.get(relationship.parent_worksheet_id, []),
+            )
+        )
+
+    # The actual mutation and save happen on a *separate* data_only=False load — a workbook
+    # loaded data_only=True never holds formula text for any sheet at all, so saving that view
+    # back would silently convert every formula anywhere in the whole file into a frozen number.
     #
-    # Held for this whole load-mutate-save cycle, not just the save — two overlapping writes
-    # to the same workbook (a sync racing an autosave PUT, or a child-sheet create) corrupted
-    # a real file live by each independently reading and rewriting it at once. See
-    # excel_io.workbook_write_lock()'s own docstring for the full story.
+    # Held for this whole load-mutate-save cycle, not just the save — two overlapping writes to
+    # the same workbook corrupted a real file live by each independently reading and rewriting
+    # it at once. See excel_io.workbook_write_lock()'s own docstring for the full story.
     with excel_io.workbook_write_lock(path):
         wb = excel_io.load_workbook(path, data_only=False)
         try:
-            # Styles come from *this* same-workbook, data_only=False parent worksheet — see
-            # child_sheet_service.create_child_sheet's matching comment for why.
-            parent_ws_formulas = wb[parent_worksheet.name]
-            header_style_grid, row_styles = filter_engine.read_row_styles(
-                parent_ws_formulas,
-                relationship.header_start_row,
-                relationship.header_end_row,
-                bounds=bounds,
-            )
-            filtered_row_styles = [style for style, keep in zip(row_styles, filter_mask) if keep]
-            data_style_rows = filter_engine.project_columns(filtered_row_styles, relationship.selected_columns)
-            # See child_sheet_service.create_child_sheet's matching comment for why merges are
-            # remapped from *this* same-workbook parent worksheet view.
-            merges = filter_engine.compute_projected_merges(
-                parent_ws_formulas,
-                relationship.header_start_row,
-                relationship.header_end_row,
-                relationship.selected_columns,
-                filter_mask,
-            )
-
+            combined = child_sheet_combiner.build_combined_content(wb_values, wb, sources)
             child_ws = wb[child_worksheet.name]
             filter_engine.write_rows(
                 child_ws,
-                header_grid,
-                relationship.selected_columns,
-                data_rows,
-                header_style_grid=header_style_grid,
-                data_style_rows=data_style_rows,
-                merges=merges,
+                combined.header_grid,
+                combined.selected_columns,
+                combined.data_rows,
+                header_style_grid=combined.header_style_grid,
+                data_style_rows=combined.data_style_rows,
+                merges=combined.merges,
             )
             # Not save_workbook(): this also restores every *other* formula cell's cached
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own
@@ -104,8 +93,10 @@ def sync_child_sheet(
             wb.close()
 
     now = datetime.now(timezone.utc)
-    relationship.last_synced_at = now
+    for relationship in relationships:
+        relationship.last_synced_at = now
     child_worksheet.content_updated_at = now
     db.commit()
-    db.refresh(relationship)
-    return relationship
+    for relationship in relationships:
+        db.refresh(relationship)
+    return relationships

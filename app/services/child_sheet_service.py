@@ -9,20 +9,23 @@ from app.models.sheet_relationship import SheetRelationship
 from app.models.workbook import Workbook
 from app.models.worksheet import Worksheet
 from app.repositories import sheet_relationship_repository, worksheet_repository
-from app.spreadsheet import excel_io, filter_engine
-from app.spreadsheet.cell_signal import used_range
+from app.spreadsheet import child_sheet_combiner, excel_io, filter_engine
 
 
-def get_relationship_or_404(
-    db: Session, *, workbook_id: uuid.UUID, relationship_id: uuid.UUID
-) -> SheetRelationship:
-    relationship = sheet_relationship_repository.get_by_id(db, relationship_id)
-    if relationship is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sheet relationship not found")
-    child_worksheet = worksheet_repository.get_by_id(db, relationship.child_worksheet_id)
+def get_relationships_for_child_or_404(
+    db: Session, *, workbook_id: uuid.UUID, child_worksheet_id: uuid.UUID
+) -> tuple[Worksheet, list[SheetRelationship]]:
+    """Looks up every source relationship contributing to one child sheet (there's always at
+    least one — a child sheet only ever exists with sources attached, see create_child_sheet),
+    scoped to the given workbook so a relationship_id/child_worksheet_id from someone else's
+    workbook 404s the same way a missing one does."""
+    child_worksheet = worksheet_repository.get_by_id(db, child_worksheet_id)
     if child_worksheet is None or child_worksheet.workbook_id != workbook_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sheet relationship not found")
-    return relationship
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Child sheet not found")
+    relationships = sheet_relationship_repository.list_by_child_worksheet_id(db, child_worksheet_id)
+    if not relationships:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Child sheet not found")
+    return child_worksheet, relationships
 
 
 def _unique_sheet_name(existing_names: list[str], desired_name: str) -> str:
@@ -38,47 +41,20 @@ def create_child_sheet(
     db: Session,
     *,
     workbook: Workbook,
-    parent_worksheet: Worksheet,
     child_sheet_name: str,
-    header_start_row: int,
-    header_end_row: int,
-    selected_columns: list[int],
-    filter_criteria: dict,
-    computed_values: list[tuple[int, int, object]] = (),
-) -> tuple[Worksheet, SheetRelationship]:
+    sources: list[child_sheet_combiner.SourceSpec],
+) -> tuple[Worksheet, list[SheetRelationship]]:
+    """Combines every source's filtered/projected rows into one new child sheet — see
+    child_sheet_combiner.build_combined_content for the per-source pipeline and how sources are
+    concatenated (header from source 0, data rows in source order, merges remapped). A plain
+    single-source child sheet is just the `len(sources) == 1` case of this same path.
+    """
     path = Path(workbook.storage_path)
     # Read with calculated values (data_only=True): the child sheet is a plain data copy, not
     # a live formula copy, so filtering/derived data operates on actual values rather than
     # formula text. Cached and read-only — this view must never be the one saved back (see
     # the data_only=False load below for why).
     wb_values = excel_io.load_workbook_cached(path, data_only=True)
-    parent_ws_values = wb_values[parent_worksheet.name]
-    # Bounds computed from a *formulas* view, cached and read-only here too (no lock needed
-    # yet — nothing is mutated until the write-lock block below) — see read_rows()'s own
-    # docstring for why a data_only=True view's used_range() can under-report a sheet with an
-    # uncalculated formula near its edge, which would otherwise desync the value read below
-    # from the style read (a different, data_only=False view of the same sheet) later on.
-    wb_formulas_cached = excel_io.load_workbook_cached(path, data_only=False)
-    bounds = used_range(wb_formulas_cached[parent_worksheet.name])
-    header_grid, rows = filter_engine.read_rows(
-        parent_ws_values, header_start_row, header_end_row, bounds=bounds
-    )
-    # Patches in the frontend's live, Univer-recalculated value for any formula cell it sent —
-    # see apply_value_overrides()'s own docstring for why openpyxl's cache alone isn't enough.
-    overrides = {(row, column): value for row, column, value in computed_values}
-    filter_engine.apply_value_overrides(header_grid, rows, header_start_row, header_end_row, overrides)
-
-    max_col = len(header_grid[0]) if header_grid else 0
-    unknown_columns = [column for column in selected_columns if column < 1 or column > max_col]
-    if unknown_columns:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown columns for this sheet: {unknown_columns}",
-        )
-
-    filter_mask = filter_engine.compute_filter_mask(rows, filter_criteria)
-    filtered_rows = [row for row, keep in zip(rows, filter_mask) if keep]
-    data_rows = filter_engine.project_columns(filtered_rows, selected_columns)
 
     # The actual mutation (creating + populating the new sheet) and save happen on a
     # *separate* data_only=False load. A workbook loaded data_only=True never holds formula
@@ -93,36 +69,22 @@ def create_child_sheet(
     with excel_io.workbook_write_lock(path):
         wb = excel_io.load_workbook(path, data_only=False)
         try:
-            # Styles come from *this* same-workbook, data_only=False parent worksheet — not
-            # wb_values above (a separate cached instance) — so the copied Font/Fill/Border/
-            # Alignment objects belong to the same openpyxl Workbook the new sheet is being
-            # written into. Same `bounds` as the value read above, so row/column indices in
-            # header_style_grid/row_styles line up with header_grid/rows exactly.
-            parent_ws_formulas = wb[parent_worksheet.name]
-            header_style_grid, row_styles = filter_engine.read_row_styles(
-                parent_ws_formulas, header_start_row, header_end_row, bounds=bounds
-            )
-            filtered_row_styles = [style for style, keep in zip(row_styles, filter_mask) if keep]
-            data_style_rows = filter_engine.project_columns(filtered_row_styles, selected_columns)
-            # Remapped from *this* same-workbook parent worksheet's own merges (not
-            # parent_ws_values above) so the ranges line up with header_style_grid/row_styles,
-            # read from the same view just above — see compute_projected_merges()'s own
-            # docstring for why merges need remapping, not just value-resolution, to survive
-            # column selection/reordering and row filtering intact.
-            merges = filter_engine.compute_projected_merges(
-                parent_ws_formulas, header_start_row, header_end_row, selected_columns, filter_mask
-            )
+            # Styles/merges are read from *this* same-workbook, data_only=False view (passed
+            # as wb_formulas below) — not wb_values above (a separate cached instance) — so
+            # the copied Font/Fill/Border/Alignment objects belong to the same openpyxl
+            # Workbook the new sheet is being written into.
+            combined = child_sheet_combiner.build_combined_content(wb_values, wb, sources)
 
             sheet_name = _unique_sheet_name(wb.sheetnames, child_sheet_name)
             child_ws = wb.create_sheet(title=sheet_name)
             filter_engine.write_rows(
                 child_ws,
-                header_grid,
-                selected_columns,
-                data_rows,
-                header_style_grid=header_style_grid,
-                data_style_rows=data_style_rows,
-                merges=merges,
+                combined.header_grid,
+                combined.selected_columns,
+                combined.data_rows,
+                header_style_grid=combined.header_style_grid,
+                data_style_rows=combined.data_style_rows,
+                merges=combined.merges,
             )
             # Not save_workbook(): this also restores every *other* formula cell's cached
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own
@@ -139,15 +101,19 @@ def create_child_sheet(
     db.commit()
     db.refresh(child_worksheet)
 
-    relationship = SheetRelationship(
-        parent_worksheet_id=parent_worksheet.id,
-        child_worksheet_id=child_worksheet.id,
-        header_start_row=header_start_row,
-        header_end_row=header_end_row,
-        selected_columns=selected_columns,
-        filter_criteria=filter_criteria,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    sheet_relationship_repository.create(db, relationship)
+    now = datetime.now(timezone.utc)
+    relationships = []
+    for source in sources:
+        relationship = SheetRelationship(
+            parent_worksheet_id=source.parent_worksheet.id,
+            child_worksheet_id=child_worksheet.id,
+            header_start_row=source.header_start_row,
+            header_end_row=source.header_end_row,
+            selected_columns=source.selected_columns,
+            filter_criteria=source.filter_criteria,
+            last_synced_at=now,
+        )
+        sheet_relationship_repository.create(db, relationship)
+        relationships.append(relationship)
 
-    return child_worksheet, relationship
+    return child_worksheet, relationships

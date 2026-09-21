@@ -18,11 +18,12 @@ class SheetRelationship(Base):
     parent_worksheet_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # No longer unique: multi-sheet extraction lets several relationships (one per contributing
+    # source sheet) share the same child_worksheet_id — see migration a1b2c3d4e5f6.
     child_worksheet_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("worksheets.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
     # Ordered list of 1-indexed column numbers, e.g. [1, 2, 4] — not header names. A real

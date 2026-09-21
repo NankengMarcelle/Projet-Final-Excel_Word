@@ -21,16 +21,22 @@ def _get_cell(cells: list[dict], row: int, column: int) -> dict:
 # Same fixture layout as test_child_sheets_and_sync.py: "Data" sheet, single-row header
 # (Name=1, Status=2, Amount=3), rows 2-4 data, row 5 has a merged "Total" cell (A5:B5) and a
 # `=SUM(C2:C4)` formula in C5.
-_CHILD_SHEET_PAYLOAD = {
-    "child_sheet_name": "Active Employees",
-    "header_start_row": 1,
-    "header_end_row": 1,
-    "selected_columns": [1, 3],
-    "filter_criteria": {
-        "logic": "AND",
-        "conditions": [{"column": 2, "operator": "equals", "value": "Active"}],
-    },
-}
+def _single_source_payload(worksheet_id: str) -> dict:
+    return {
+        "child_sheet_name": "Active Employees",
+        "sources": [
+            {
+                "parent_worksheet_id": worksheet_id,
+                "header_start_row": 1,
+                "header_end_row": 1,
+                "selected_columns": [1, 3],
+                "filter_criteria": {
+                    "logic": "AND",
+                    "conditions": [{"column": 2, "operator": "equals", "value": "Active"}],
+                },
+            }
+        ],
+    }
 
 
 def _upload_and_get_ids(api_client: TestClient, headers: dict, sample_xlsx_bytes: bytes) -> tuple[str, str]:
@@ -93,11 +99,11 @@ def test_remove_col_shifts_and_cascades_child_sheet_selection(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={"parent_worksheet_id": worksheet_id, **_CHILD_SHEET_PAYLOAD},
+        json=_single_source_payload(worksheet_id),
     )
     assert create_response.status_code == 201
-    relationship_id = create_response.json()["relationship"]["id"]
-    assert create_response.json()["relationship"]["selected_columns"] == [1, 3]
+    relationship_id = create_response.json()["relationships"][0]["id"]
+    assert create_response.json()["relationships"][0]["selected_columns"] == [1, 3]
 
     # Delete "Status" (column 2) — not itself selected, but Amount (column 3) needs to shift
     # down to 2, and the filter condition referencing column 2 needs to be dropped entirely
@@ -123,9 +129,10 @@ def test_remove_col_cascades_a_selected_column_deletion_to_the_child_sheet(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={"parent_worksheet_id": worksheet_id, **_CHILD_SHEET_PAYLOAD},
+        json=_single_source_payload(worksheet_id),
     )
-    relationship_id = create_response.json()["relationship"]["id"]
+    relationship_id = create_response.json()["relationships"][0]["id"]
+    child_worksheet_id = create_response.json()["worksheet"]["id"]
 
     # Delete "Name" (column 1) — it IS in selected_columns ([1, 3]). The parent lost that
     # column, so the child sheet's selection should lose it too, not keep pointing at
@@ -144,7 +151,7 @@ def test_remove_col_cascades_a_selected_column_deletion_to_the_child_sheet(
     assert relationship["selected_columns"] == [2]
 
     status_response = api_client.get(
-        f"/workbooks/{workbook_id}/child-sheets/{relationship_id}/status", headers=auth_headers
+        f"/workbooks/{workbook_id}/child-sheets/by-child/{child_worksheet_id}/status", headers=auth_headers
     )
     assert status_response.json()["is_outdated"] is True
 
@@ -157,9 +164,9 @@ def test_insert_col_shifts_child_sheet_selection_up(
     create_response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=auth_headers,
-        json={"parent_worksheet_id": worksheet_id, **_CHILD_SHEET_PAYLOAD},
+        json=_single_source_payload(worksheet_id),
     )
-    relationship_id = create_response.json()["relationship"]["id"]
+    relationship_id = create_response.json()["relationships"][0]["id"]
 
     # Insert a new column before everything — every existing column shifts right by 1.
     response = api_client.patch(

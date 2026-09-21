@@ -21,23 +21,25 @@ def _download_workbook(api_client: TestClient, headers: dict, workbook_id: str):
 
 # Same fixture layout as test_worksheet_structural_edits.py / test_child_sheets_and_sync.py:
 # "Data" sheet, single-row header (Name=1, Status=2, Amount=3).
-_CHILD_SHEET_PAYLOAD = {
-    "child_sheet_name": "Active Employees",
-    "header_start_row": 1,
-    "header_end_row": 1,
-    "selected_columns": [1, 3],
-    "filter_criteria": {
-        "logic": "AND",
-        "conditions": [{"column": 2, "operator": "equals", "value": "Active"}],
-    },
-}
-
-
 def _create_child_sheet(api_client: TestClient, headers: dict, workbook_id: str, parent_worksheet_id: str) -> dict:
     response = api_client.post(
         f"/workbooks/{workbook_id}/child-sheets",
         headers=headers,
-        json={"parent_worksheet_id": parent_worksheet_id, **_CHILD_SHEET_PAYLOAD},
+        json={
+            "child_sheet_name": "Active Employees",
+            "sources": [
+                {
+                    "parent_worksheet_id": parent_worksheet_id,
+                    "header_start_row": 1,
+                    "header_end_row": 1,
+                    "selected_columns": [1, 3],
+                    "filter_criteria": {
+                        "logic": "AND",
+                        "conditions": [{"column": 2, "operator": "equals", "value": "Active"}],
+                    },
+                }
+            ],
+        },
     )
     assert response.status_code == 201
     return response.json()
@@ -81,7 +83,7 @@ def test_deleting_a_parent_worksheet_orphans_the_child_as_static_data(
 
     child = _create_child_sheet(api_client, auth_headers, workbook_id, parent_worksheet_id)
     child_worksheet_id = child["worksheet"]["id"]
-    relationship_id = child["relationship"]["id"]
+    relationship_id = child["relationships"][0]["id"]
 
     delete_response = api_client.delete(
         f"/workbooks/{workbook_id}/worksheets/{parent_worksheet_id}", headers=auth_headers
@@ -116,7 +118,7 @@ def test_deleting_a_child_worksheet_removes_only_its_own_relationship(
 
     child = _create_child_sheet(api_client, auth_headers, workbook_id, parent_worksheet_id)
     child_worksheet_id = child["worksheet"]["id"]
-    relationship_id = child["relationship"]["id"]
+    relationship_id = child["relationships"][0]["id"]
 
     delete_response = api_client.delete(
         f"/workbooks/{workbook_id}/worksheets/{child_worksheet_id}", headers=auth_headers

@@ -167,22 +167,33 @@ def _download_workbook(api_client: TestClient, headers: dict, workbook_id: str):
     return load_workbook(io.BytesIO(response.content))
 
 
+def _create_child_sheet(api_client: TestClient, headers: dict, workbook_id: str, *, child_sheet_name: str, sources: list[dict]):
+    return api_client.post(
+        f"/workbooks/{workbook_id}/child-sheets",
+        headers=headers,
+        json={"child_sheet_name": child_sheet_name, "sources": sources},
+    )
+
+
 def test_create_child_sheet_preserves_merges_with_no_column_reorder(
     api_client: TestClient, auth_headers: dict
 ):
     workbook_id, parent_worksheet_id = _upload(api_client, auth_headers, _build_merged_workbook_bytes())
 
-    response = api_client.post(
-        f"/workbooks/{workbook_id}/child-sheets",
-        headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Matrix Copy",
-            "header_start_row": 1,
-            "header_end_row": 2,
-            "selected_columns": [1, 2, 3],
-            "filter_criteria": {"logic": "AND", "conditions": []},
-        },
+    response = _create_child_sheet(
+        api_client,
+        auth_headers,
+        workbook_id,
+        child_sheet_name="Matrix Copy",
+        sources=[
+            {
+                "parent_worksheet_id": parent_worksheet_id,
+                "header_start_row": 1,
+                "header_end_row": 2,
+                "selected_columns": [1, 2, 3],
+                "filter_criteria": {"logic": "AND", "conditions": []},
+            }
+        ],
     )
     assert response.status_code == 201
 
@@ -204,17 +215,20 @@ def test_create_child_sheet_remaps_merges_for_column_reorder_and_drop(
     workbook_id, parent_worksheet_id = _upload(api_client, auth_headers, _build_merged_workbook_bytes())
 
     # Drop column 2 ("AE") and put column 3 ("CP") before column 1 ("Action").
-    response = api_client.post(
-        f"/workbooks/{workbook_id}/child-sheets",
-        headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Matrix Reordered",
-            "header_start_row": 1,
-            "header_end_row": 2,
-            "selected_columns": [3, 1],
-            "filter_criteria": {"logic": "AND", "conditions": []},
-        },
+    response = _create_child_sheet(
+        api_client,
+        auth_headers,
+        workbook_id,
+        child_sheet_name="Matrix Reordered",
+        sources=[
+            {
+                "parent_worksheet_id": parent_worksheet_id,
+                "header_start_row": 1,
+                "header_end_row": 2,
+                "selected_columns": [3, 1],
+                "filter_criteria": {"logic": "AND", "conditions": []},
+            }
+        ],
     )
     assert response.status_code == 201
 
@@ -246,19 +260,22 @@ def test_sync_child_sheet_recreates_merges_and_clears_stale_ones(
     # freshly written data.
     workbook_id, parent_worksheet_id = _upload(api_client, auth_headers, _build_merged_workbook_bytes())
 
-    create_response = api_client.post(
-        f"/workbooks/{workbook_id}/child-sheets",
-        headers=auth_headers,
-        json={
-            "parent_worksheet_id": parent_worksheet_id,
-            "child_sheet_name": "Matrix Copy",
-            "header_start_row": 1,
-            "header_end_row": 2,
-            "selected_columns": [1, 2, 3],
-            "filter_criteria": {"logic": "AND", "conditions": []},
-        },
+    create_response = _create_child_sheet(
+        api_client,
+        auth_headers,
+        workbook_id,
+        child_sheet_name="Matrix Copy",
+        sources=[
+            {
+                "parent_worksheet_id": parent_worksheet_id,
+                "header_start_row": 1,
+                "header_end_row": 2,
+                "selected_columns": [1, 2, 3],
+                "filter_criteria": {"logic": "AND", "conditions": []},
+            }
+        ],
     )
-    relationship_id = create_response.json()["relationship"]["id"]
+    child_worksheet_id = create_response.json()["worksheet"]["id"]
 
     # Force a real re-sync by editing the parent first.
     api_client.put(
@@ -267,7 +284,7 @@ def test_sync_child_sheet_recreates_merges_and_clears_stale_ones(
         json={"edits": [{"row": 5, "column": 2, "value": 99}]},
     )
     sync_response = api_client.post(
-        f"/workbooks/{workbook_id}/child-sheets/{relationship_id}/sync", headers=auth_headers
+        f"/workbooks/{workbook_id}/child-sheets/by-child/{child_worksheet_id}/sync", headers=auth_headers
     )
     assert sync_response.status_code == 200
 
