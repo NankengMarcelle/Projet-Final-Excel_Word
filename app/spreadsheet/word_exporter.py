@@ -400,4 +400,5 @@ def worksheet_to_docx(
         if dimension and dimension.height:
             table.rows[row_index - 1].height = Pt(dimension.height * font_scale)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
