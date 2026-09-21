@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from app.models.workbook import Workbook
 from app.models.worksheet import Worksheet
 from app.repositories import sheet_relationship_repository, worksheet_repository
-from app.schemas.worksheet import CellData, WorksheetColumn, WorksheetData
-from app.spreadsheet import cell_editor, excel_io, filter_engine
+from app.schemas.worksheet import CellData, WorksheetColumn, WorksheetData, WorksheetMetadataUpdate
+from app.spreadsheet import cell_editor, excel_io, filter_engine, worksheet_metadata
 from app.spreadsheet.cell_signal import cell_has_signal, color_to_hex
 
 
@@ -86,6 +86,7 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
     row_heights = {
         index: dim.height for index, dim in ws_formulas.row_dimensions.items() if dim.height
     }
+    metadata = worksheet_metadata.read_worksheet_metadata(ws_formulas)
 
     result = WorksheetData(
         id=worksheet.id,
@@ -96,13 +97,24 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
         merged_cells=merged_cells,
         column_widths=column_widths,
         row_heights=row_heights,
+        column_hidden=metadata.column_hidden,
+        row_hidden=metadata.row_hidden,
+        freeze=metadata.freeze,
+        conditional_formats=metadata.conditional_formats,
+        data_validations=metadata.data_validations,
+        autofilter=metadata.autofilter,
     )
     print(f"[PERF] read_worksheet_data: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return result
 
 
 def apply_edits(
-    db: Session, *, workbook: Workbook, worksheet: Worksheet, edits: list[dict]
+    db: Session,
+    *,
+    workbook: Workbook,
+    worksheet: Worksheet,
+    edits: list[dict],
+    metadata: WorksheetMetadataUpdate | None = None,
 ) -> Worksheet:
     # TEMPORARY: total end-to-end timer for the live latency investigation — see excel_io.py's
     # _perf_log for the per-phase breakdown this should sum to. Remove both once diagnosed.
@@ -125,6 +137,12 @@ def apply_edits(
                 (worksheet.name, ws.cell(row=edit["row"], column=edit["column"]).coordinate)
                 for edit in edits
             }
+            # None = don't touch sheet metadata this save (the common case) — present means a
+            # full declarative replace of merges/freeze/column-row sizing/conditional
+            # formatting/data validation/autofilter from exactly what Univer's own snapshot
+            # currently says. See worksheet_metadata.py.
+            if metadata is not None:
+                worksheet_metadata.apply_worksheet_metadata(ws, metadata)
             excel_io.save_workbook_preserving_formula_cache(wb, path, exclude=edited_coordinates)
         finally:
             wb.close()

@@ -32,6 +32,63 @@ class CellData(BaseModel):
     borders: dict[str, str | None]
 
 
+class ConditionalFormatRule(BaseModel):
+    # Excel A1-notation range this rule applies to, e.g. "B2:B5" — passed straight through to
+    # openpyxl's own range-string APIs on write, matching how `merged_cells` is already
+    # represented below.
+    range: str
+    # One of openpyxl's own CellIsRule operator names (which happen to match Univer's own
+    # operator strings directly): greaterThan, lessThan, equal, notEqual,
+    # greaterThanOrEqual, lessThanOrEqual, between, notBetween. Any other value (Univer's
+    # color-scale/data-bar/icon-set/text/date rule types) is silently skipped on write rather
+    # than raising — see worksheet_metadata.py's module docstring for why this is scoped to
+    # just the highlightCell-with-a-number-operator family for now.
+    operator: str
+    values: list[str]
+    fill_color: str | None = None
+
+
+class DataValidationRule(BaseModel):
+    range: str
+    # The allowed value list — only Univer's "list" criteria type is supported on write today
+    # (confirmed live; number/date-range criteria use different, not-yet-confirmed Univer
+    # criteria-type strings — see worksheet_metadata.py).
+    values: list[str]
+    allow_blank: bool = True
+
+
+class AutofilterColumn(BaseModel):
+    # 0-indexed within the filter range — matches openpyxl's own `colId` convention directly,
+    # not this API's usual 1-indexed column-number convention.
+    column: int
+    values: list[str]
+
+
+class AutofilterState(BaseModel):
+    range: str
+    columns: list[AutofilterColumn] = []
+
+
+class WorksheetMetadataUpdate(BaseModel):
+    """A full, declarative snapshot of a worksheet's structural/view state, as Univer's own
+    engine currently reports it — every field here fully replaces its category on write (clear
+    then rebuild from exactly what's provided), not a diff against what was there before. See
+    `app/spreadsheet/worksheet_metadata.py`'s module docstring for the reasoning."""
+
+    merges: list[str] = []
+    # A single Excel cell reference (e.g. "B2") marking the first cell *below and right of* the
+    # frozen area, or None for no freeze — matches openpyxl's own `ws.freeze_panes` format
+    # directly.
+    freeze: str | None = None
+    column_widths: dict[str, float] = {}
+    column_hidden: list[str] = []
+    row_heights: dict[int, float] = {}
+    row_hidden: list[int] = []
+    conditional_formats: list[ConditionalFormatRule] = []
+    data_validations: list[DataValidationRule] = []
+    autofilter: AutofilterState | None = None
+
+
 class WorksheetData(BaseModel):
     id: uuid.UUID
     name: str
@@ -41,6 +98,12 @@ class WorksheetData(BaseModel):
     merged_cells: list[str]
     column_widths: dict[str, float]
     row_heights: dict[int, float]
+    column_hidden: list[str] = []
+    row_hidden: list[int] = []
+    freeze: str | None = None
+    conditional_formats: list[ConditionalFormatRule] = []
+    data_validations: list[DataValidationRule] = []
+    autofilter: AutofilterState | None = None
 
 
 class CellEdit(BaseModel):
@@ -68,6 +131,10 @@ class CellEdit(BaseModel):
 
 class WorksheetEditRequest(BaseModel):
     edits: list[CellEdit]
+    # None = don't touch sheet metadata this save (the common case — most saves are just cell
+    # edits); present = fully replace merges/freeze/column-row sizing/conditional formatting/
+    # data validation/autofilter with exactly what's provided. See worksheet_metadata.py.
+    metadata: WorksheetMetadataUpdate | None = None
 
 
 class StructuralEditRequest(BaseModel):

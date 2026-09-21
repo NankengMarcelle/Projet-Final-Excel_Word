@@ -76,7 +76,9 @@ def edit_worksheet(
     # or "bold": false to un-bold it), which stays in the dict. apply_cell_edits relies on this
     # distinction via `"field" in edit` checks.
     edits = [edit.model_dump(exclude_unset=True) for edit in payload.edits]
-    return worksheet_service.apply_edits(db, workbook=workbook, worksheet=worksheet, edits=edits)
+    return worksheet_service.apply_edits(
+        db, workbook=workbook, worksheet=worksheet, edits=edits, metadata=payload.metadata
+    )
 
 
 @router.patch("/{worksheet_id}/structure", response_model=WorksheetRead)
