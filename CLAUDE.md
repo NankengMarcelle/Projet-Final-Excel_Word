@@ -606,6 +606,59 @@ referencing it, which break with no rewrite. Sibling gaps, not fixed here: Unive
 menu also exposes rename and tab reordering, both still silent no-ops for the same reason
 deleting used to be.
 
+### Generalized sheet metadata: trust Univer's own snapshot instead of an endpoint per feature
+
+Live-testing Univer's own facade API directly (bypassing the UI) confirmed its engine already
+computes and correctly stores the result of every spreadsheet feature tried — sort, merge,
+freeze panes, column/row sizing+hiding, conditional formatting, data validation, autofilter,
+insert/delete columns, and copy/paste. Before this, the backend only persisted cell values/
+styles and structural row/col edits/whole-sheet delete; merges/column-widths/row-heights were
+read-only reflections of the original upload, and freeze panes/conditional formatting/data
+validation/autofilter weren't touched anywhere at all — using any of those looked saved in the
+UI but vanished on reload. Rather than keep adding one bespoke endpoint per feature, one
+generalized "sheet metadata" channel now captures whatever Univer's snapshot currently says for
+a sheet and declaratively rewrites it into the `.xlsx` via openpyxl on every save — same
+philosophy `child_sheet_combiner.py`/`sync_service.py` already use.
+
+**New `app/spreadsheet/worksheet_metadata.py`**: `apply_worksheet_metadata(ws, metadata)` and
+`read_worksheet_metadata(ws)`, one private function per category (merges, freeze, column/row
+sizing+hidden, conditional formatting, data validation, autofilter). Every write is a full
+declarative replace — clear the category, rebuild it from exactly what's provided — not a diff
+against what was there before; `metadata` is optional on the request (`None` = don't touch
+metadata this save, matching `CellEdit`'s existing PATCH-semantic convention). Merges reuse
+`filter_engine.safe_unmerge` before re-merging, the same helper the structural-edit path already
+uses. Ranges (merges, conditional-format/data-validation/autofilter ranges) are represented on
+the wire as plain Excel A1-notation strings (e.g. `"B2:B5"`) — openpyxl's own range-taking APIs
+(`ws.merge_cells`, `ws.conditional_formatting.add`, `dv.add`, `ws.auto_filter.ref =`) all accept
+these directly, so no row/column-number parsing is needed on this side at all.
+
+**Deliberately scoped to what maps cleanly onto openpyxl 3.1's own model** (confirmed by reading
+its actual installed rule classes rather than assuming): conditional formatting only supports
+`CellIsRule`-shaped rules (a number/blank operator — openpyxl has no convenience wrapper for
+color scales, data bars, icon sets, or Univer's text/date rule subtypes); data validation only
+supports Univer's `"list"` criteria type (number/date-range criteria use Univer criteria-type
+strings not yet confirmed against the installed bundle); autofilter only supports single-column
+discrete-value filters. Anything outside these is silently skipped with a logged warning rather
+than raising — an unsupported rule just doesn't round-trip yet instead of breaking the whole
+save. Row/column insert/delete keeps its own dedicated endpoint unchanged; this generalization is
+for sheet-level formatting/validation/view state, not structural shifts.
+
+Wired into the existing single-PUT-per-worksheet flow, not a new endpoint: `WorksheetEditRequest`
+gained an optional `metadata` field, and `apply_edits` applies it inside the same
+`workbook_write_lock` block, after `cell_editor.apply_cell_edits` and before
+`save_workbook_preserving_formula_cache` — one lock, one save cycle, same concurrency-safety
+pattern as everywhere else in this file. `read_worksheet_data` calls the matching read helper so
+a previous save's metadata round-trips back out, not just whatever the original upload had.
+
+Live-verified end-to-end against a real worksheet in the actual running app (not just the new
+`tests/test_worksheet_metadata.py` round-trip suite): merged cells, froze panes, resized+hid a
+column, added a conditional format, added list data validation, and set an autofilter — all
+through real Univer commands, not the API directly — confirmed the resulting PUT carried a fully
+populated `metadata` block, confirmed via a fresh GET that every value came back exactly right,
+then reloaded the page and confirmed Univer's own snapshot reconstructed every one of them
+identically (including the conditional-format rule actually repainting red on the matching
+cells and the autofilter actually hiding the non-matching row).
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running
@@ -980,3 +1033,65 @@ to retry immediately and unconditionally, no backoff — confirmed live, reprodu
 crash fired 357+ identical failing requests at the backend in under a minute. Now a failed save only
 stops; retrying only ever happens because a *newer* value diff was queued while the save was in
 flight, matching what the surrounding code already documented as the intent.
+
+### Generalized sheet metadata: reading Univer's live state instead of caching it
+
+Frontend half of the backend's own "Generalized sheet metadata" section above. Every mapping here
+was confirmed by driving Univer's real facade API directly in the browser console (a throwaway
+`window.__univerAPI` debug hook, removed before committing) rather than assumed from naming
+convention — several guesses turned out wrong this way (data validation's mutation ids live under
+a completely different `data-validation.mutation.*` namespace, not `sheet.mutation.*`; conditional
+formatting's fill color is stored as a `"rgb(r, g, b)"` string, not the `"#RRGGBB"` hex cell
+styles use).
+
+**`src/univer/adapter.ts`** gained the write direction (merges/freeze/column-row sizing/
+conditional formatting/data validation/autofilter were previously load-only, or entirely absent):
+`buildWorksheetMetadataUpdate(raw: RawWorksheetMetadata)` converts already-extracted plain Univer
+values into the backend's wire format — inverse of the existing `width*7+5`/`height*96/72` pixel
+conversions, plus new `columnIndexToLetter`/`parseA1Range`/`buildA1Range` helpers for range
+strings. Deliberately plain-data-in/plain-data-out (no live Univer objects), kept separate from
+the actual facade-API extraction so it stays testable without mocking Univer — see
+`adapter.test.ts`. The load direction (`backendToUniverWorksheetData`) now also sets `freeze` and
+column/row `hd` (hidden) flags directly on the sheet snapshot; conditional formatting/data
+validation/autofilter don't live on a sheet's own snapshot the way those do — Univer keeps them in
+workbook-level `resources` entries (`SHEET_CONDITIONAL_FORMATTING_PLUGIN`,
+`SHEET_DATA_VALIDATION_PLUGIN`, `SHEET_FILTER_PLUGIN`), each a JSON string keyed by sheet id
+(confirmed live via `workbook.save().resources`), built by the new exported
+`buildWorkbookResources(sheets)`.
+
+**Real bug caught only by live-reloading the actual app, not by unit tests**: `EditorPage.tsx`
+builds its own `workbookData` object inline (it composes sheets incrementally from a separate
+`worksheetDataList`/`initialWorksheets` pair) rather than calling `backendToUniverWorkbookData` —
+so the first version of this work added `resources` to `backendToUniverWorkbookData` and it was
+silently never used at all in the real app; `wb.save().resources` came back with an empty-string
+`data` for every plugin after a real reload. Fixed by extracting `buildWorkbookResources` as its
+own exported function and calling it directly from `EditorPage.tsx`'s existing inline
+construction. This is exactly the kind of gap this project's own established discipline (measure
+against the real running app, not just unit tests) exists to catch — the unit tests and an
+isolated Python round-trip script both passed the whole time.
+
+**Trigger design — always pull metadata fresh at save time, never cached from whenever it
+changed.** `UniverSheetGridHandle` gained `getWorksheetMetadata(worksheetId)`, reading live
+Univer state at the moment of the call (mirrors the existing `getComputedValues` pattern exactly).
+`useDebouncedAutosave`'s `flushSheet` calls this right before every save and always includes the
+result, whether or not `edits` is empty — so a normal cell-edit save also keeps metadata in sync
+for free. A *pure* metadata change with no cell-value change at all (e.g. just merging two cells)
+still needs something to kick the existing debounce timer: a confirmed list of metadata mutation
+ids (`sheet.mutation.add-worksheet-merge`, `set-frozen`, `set-worksheet-col-width`,
+`set-col-hidden`/`set-col-visible`, `set-row-hidden`/`set-row-visible`, `add-conditional-rule`/
+`set-conditional-rule`/`delete-conditional-rule`, `data-validation.mutation.addRule`/`removeRule`,
+`set-filter-range`/`set-filter-criteria`/`remove-filter`) is checked in `onCommandExecuted`
+(sibling to the existing `STRUCTURAL_COMMAND_IDS` map) and, on a match, reuses the normal
+`onChange`/`handleChange` pathway with that one sheet's current snapshot — a new
+`ChangedWorksheetsSnapshot.metadataDirty` flag tells `useDebouncedAutosave` to save even if the
+resulting cell-value diff is empty. If this command-id list is ever missing one, that sheet's
+metadata still saves correctly the next time *anything* else triggers a flush for it (a later
+edit, manual Save, Ctrl+S, or the unload safety net) — a promptness optimization, not something
+correctness depends on, the same resilience philosophy as `SheetValueChanged`'s own
+missing-live-value fallback (see the autosave-performance section above).
+
+Live-verified end-to-end against the real app exactly as described in the backend section above —
+including confirming that a genuinely *unsupported* rule (nothing was tested here, but the same
+skip-with-warning path) doesn't block the rest of a save, and that a full page reload reconstructs
+every category identically, with the conditional-format rule visibly repainting and the autofilter
+visibly hiding the non-matching row once Univer's own lazy recalculation caught up.
