@@ -1,0 +1,63 @@
+# Backend + a self-hosted Postgres + the frontend, for a company VM deployment with nothing
+# external (no Supabase). Local file storage lives on the VM's own disk via the `storage_data`
+# volume — see backend/CLAUDE.md's "Dockerizing for a self-hosted VM" section for the full
+# reasoning.
+#
+# Real secrets come from a gitignored `.env.docker` file (see .env.docker.example for the
+# template) — same split this project already uses for backend/.env vs backend/.env.example.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SECRET_KEY: ${SECRET_KEY}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      # Absolute path, not the "storage" relative default — makes exactly what's being
+      # persisted by the volume below unambiguous, rather than relying on the container's CWD.
+      STORAGE_ROOT: /data/storage
+      STORAGE_BACKEND: local
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      - storage_data:/data/storage
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Vite bakes this into the built JS at *build* time, and it's read by the user's
+        # browser, not by another container — so this has to be an address the browser can
+        # reach (localhost:8000, since that's what the backend's own `ports:` mapping above
+        # exposes to the host), never the internal Docker network name (http://backend:8000),
+        # which only resolves *between* containers, not from the host machine's browser at all.
+        VITE_API_BASE_URL: ${FRONTEND_API_BASE_URL:-http://localhost:8000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+  storage_data:

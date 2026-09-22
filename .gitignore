@@ -1,0 +1,2 @@
+# Real docker-compose secrets — see .env.docker.example for the template
+/.env.docker

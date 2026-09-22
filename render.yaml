@@ -1,0 +1,64 @@
+services:
+  - type: web
+    name: sheetflow-backend
+    runtime: python
+    plan: free
+    # This file lives at the repo root (required for Render's Blueprint auto-detection when
+    # connecting the repo) even though the actual backend code lives under backend/ — one repo
+    # shared with the frontend (backend/ and frontend/ as sibling folders). rootDir scopes the
+    # build/start commands below to that subfolder.
+    rootDir: backend
+    # Without this, any push touching frontend/ (unrelated UI work) would also trigger a
+    # rebuild + restart of this live API — annoying at best while someone's mid-testing
+    # against it, and a waste of the free plan's build minutes at worst.
+    buildFilter:
+      paths:
+        - backend/**
+    buildCommand: "pip install -r requirements.txt"
+    # Migrations run on every start — idempotent (alembic no-ops once already at head), and
+    # simplest reliable way to keep a small testing deployment's schema in sync without a
+    # separate manual step.
+    startCommand: "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Supabase Postgres connection string (Project Settings > Database > Connection string,
+      # the "URI" one, rewritten to the postgresql+psycopg2:// scheme SQLAlchemy expects here) —
+      # set manually in the Render dashboard, not committed. Moved off Render's own free
+      # Postgres because that one auto-deletes 30+14 days after creation; Supabase's free tier
+      # only auto-*pauses* after 7 days idle, never deletes.
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+      - key: STORAGE_ROOT
+        # Plain relative path again — no disk needed. With STORAGE_BACKEND=s3 below, this is
+        # just a warm local cache (see excel_io.py's module notes); Render is free to wipe it
+        # on every restart since Supabase Storage is the actual source of truth.
+        value: "storage"
+      - key: STORAGE_BACKEND
+        value: "s3"
+      - key: S3_ENDPOINT_URL
+        # Not secret (just identifies which Supabase project's Storage to talk to), so it's
+        # committed here rather than left blank — Blueprint sync re-applies whatever's in this
+        # file on every sync, so a blank value here would silently wipe out anything typed
+        # into the dashboard by hand the next time this file changes (exactly what happened
+        # once already: a manually-entered value here got reset to "" on the next sync).
+        value: "https://uwspkpnlbywlvnunjrcb.supabase.co/storage/v1/s3"
+      - key: S3_REGION
+        value: "eu-west-1"
+      - key: S3_BUCKET_NAME
+        value: "sheetflow_storage"
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        # The deployed frontend's real origin, plus the local Vite dev origins so testing
+        # against this live backend from localhost still works. Never "*" — allow_credentials=
+        # True in main.py (needed for the Authorization: Bearer header this app's auth uses)
+        # is incompatible with a wildcard origin per the CORS spec; browsers reject that
+        # combination outright regardless of what this server sends.
+        value: "https://projet-excel-word-orcin.vercel.app,http://localhost:5173,http://localhost:5174"
