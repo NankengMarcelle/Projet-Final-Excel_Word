@@ -1,0 +1,283 @@
+/* Top bar / account menu styling moved to AppShell.css — WorkspacePage no longer owns its own
+   header, it renders inside the shared shell (see AppShell.tsx / router.tsx). */
+
+/* ---- Main content ---- */
+
+.workspace-main {
+  flex: 1;
+  width: 100%;
+  /* Was a flat 1040px — on a large/wide monitor the header above (full-width) made this cap
+     read as broken/unresponsive rather than intentional: a big empty gutter on both sides while
+     the workbook table's Name column (already `1fr`, see .workbook-row below) sat artificially
+     narrow. 1440px keeps line-length sane on ultra-wide displays without capping so early that
+     it looks like the page ignored the available space on an ordinary 1920px screen. */
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+  box-sizing: border-box;
+}
+
+.workspace-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0 0 16px;
+}
+
+/* ---- Greeting ---- */
+
+.workspace-greeting {
+  margin-bottom: 32px;
+}
+
+.workspace-greeting-heading {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-h);
+  margin: 0 0 6px;
+  letter-spacing: -0.3px;
+}
+
+.workspace-greeting-subtitle {
+  font-size: 14.5px;
+  color: var(--text);
+  margin: 0;
+}
+
+/* ---- Upload bar: full-width, matching the workbook list below rather than a small
+   fixed-width card stranded on one side of the page. ---- */
+
+.start-cards {
+  margin-bottom: 32px;
+}
+
+.upload-card {
+  width: 100%;
+}
+
+.upload-card-preview {
+  width: 100%;
+  height: 64px;
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.upload-card-preview svg {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.upload-card-preview:hover,
+.upload-card-preview.dragging {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.upload-card-preview:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.upload-card-label {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.upload-card input[type="file"] {
+  display: none;
+}
+
+.upload-card-error {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--danger);
+  text-align: center;
+}
+
+/* ---- Workbook list ---- */
+
+.workspace-status {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.workspace-empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.workbook-columns,
+.workbook-row {
+  display: grid;
+  grid-template-columns: 1fr 100px 150px 40px;
+  align-items: center;
+  gap: 12px;
+}
+
+.workbook-columns {
+  padding: 0 16px 8px;
+  font-size: 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.workbook-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 18px 16px 6px;
+}
+
+.workbook-row {
+  padding: 9px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+}
+
+.workbook-row:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.workbook-row-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.workbook-row-name svg {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+}
+
+.workbook-row-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.workbook-row-size,
+.workbook-row-date {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.workbook-rename-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  padding: 3px 8px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.workbook-row-menu-btn {
+  justify-self: end;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, background-color 0.1s ease;
+}
+
+.workbook-row:hover .workbook-row-menu-btn,
+.workbook-row-menu-btn.open {
+  opacity: 1;
+}
+
+.workbook-row-menu-btn:hover {
+  background: var(--code-bg);
+}
+
+.workbook-row-menu {
+  position: absolute;
+  right: 16px;
+  top: calc(100% - 6px);
+  width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 15;
+  text-align: left;
+}
+
+.workbook-row-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-h);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workbook-row-menu button:hover {
+  background: var(--code-bg);
+}
+
+.workbook-row-menu button.danger {
+  color: var(--danger);
+}
+
+.workbook-row-error {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .workspace-brand span {
+    display: none;
+  }
+  .workbook-columns,
+  .workbook-row {
+    grid-template-columns: 1fr 40px;
+  }
+  .workbook-columns span:not(:first-child):not(:last-child),
+  .workbook-row-size,
+  .workbook-row-date {
+    display: none;
+  }
+}

@@ -1,0 +1,172 @@
+/* Same shell/header setup as WorkspacePage.css (shared AppShell) — see that file's own note. */
+
+.word-files-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+  box-sizing: border-box;
+}
+
+.word-files-heading-section {
+  margin-bottom: 32px;
+}
+
+.word-files-heading {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-h);
+  margin: 0 0 6px;
+  letter-spacing: -0.3px;
+}
+
+.word-files-subtitle {
+  font-size: 14.5px;
+  color: var(--text);
+  margin: 0;
+}
+
+.word-files-status {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.word-files-empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* ---- Table ---- */
+
+.word-file-columns,
+.word-file-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 90px 130px 175px;
+  align-items: center;
+  gap: 12px;
+}
+
+.word-file-columns {
+  padding: 0 16px 8px;
+  font-size: 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.word-file-row {
+  padding: 9px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+}
+
+.word-file-row:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.word-file-row-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--accent);
+}
+
+.word-file-row-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.word-file-row-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.word-file-row-size,
+.word-file-row-date {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.word-file-row-action {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.word-file-row-action button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.word-file-row-action button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.word-file-row-action button:not(.word-file-row-delete) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.word-file-row-action button:not(.word-file-row-delete):hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.word-file-row-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text);
+}
+
+.word-file-row-delete:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.word-file-row-error {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .word-file-columns,
+  .word-file-row {
+    grid-template-columns: 1fr 100px;
+  }
+  .word-file-columns span:nth-child(2),
+  .word-file-columns span:nth-child(3),
+  .word-file-row-source,
+  .word-file-row-size,
+  .word-file-row-date {
+    display: none;
+  }
+}

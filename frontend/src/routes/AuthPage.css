@@ -1,0 +1,301 @@
+/* ANTIC-matching auth screens: light neutral background, ANTIC navy (#02006c) kept only as an
+   accent (logo ring, headline, links, primary button) rather than covering the whole page.
+   Previously a full-bleed navy gradient + photo + glass card — reworked after supervisor
+   feedback that the screen read as "too blue"; navy stays the brand color, just demoted from
+   background to accent. Fixed light branding regardless of the app's light/dark theme setting —
+   a login screen's identity doesn't follow the signed-in app's preference. */
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
+
+.auth-page {
+  flex: 1;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  background: linear-gradient(160deg, #f8f9fc 0%, #eef0f8 100%);
+}
+
+.auth-decor {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(2, 0, 108, 0.035);
+  pointer-events: none;
+}
+
+.auth-decor-tl {
+  top: -10%;
+  left: -10%;
+  width: 500px;
+  height: 500px;
+}
+
+.auth-decor-br {
+  bottom: -15%;
+  right: -10%;
+  width: 600px;
+  height: 600px;
+}
+
+.auth-lang-toggle {
+  position: absolute;
+  top: 2rem;
+  right: 2rem;
+  display: flex;
+  align-items: center;
+  background: #fff;
+  border-radius: 20px;
+  padding: 3px;
+  border: 1px solid #e2e5f0;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+  z-index: 2;
+}
+
+.auth-lang-toggle button {
+  padding: 0.3rem 0.8rem;
+  border-radius: 16px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  font-weight: 800;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.auth-lang-toggle button.active {
+  background: #02006c;
+  color: #fff;
+}
+
+.auth-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border-radius: 24px;
+  border: 1px solid #e7e9f2;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.09);
+  padding: 2.5rem;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #171a2e;
+}
+
+.auth-logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(2, 0, 108, 0.12);
+  margin-bottom: 1rem;
+  border: 2px solid #eef0f8;
+  flex-shrink: 0;
+}
+
+.auth-logo img {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+}
+
+.auth-card h1 {
+  font-size: 1.45rem;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: #02006c;
+}
+
+.auth-subtitle {
+  font-size: 0.8rem;
+  color: #6b7280;
+  text-align: center;
+  margin: 4px 0 1.5rem;
+}
+
+.auth-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.auth-field-group label {
+  font-size: 0.775rem;
+  font-weight: 700;
+  color: #374151;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.auth-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.auth-input-wrap svg {
+  position: absolute;
+  left: 14px;
+  color: #02006c;
+  opacity: 0.85;
+  pointer-events: none;
+  width: 18px;
+  height: 18px;
+}
+
+.auth-input-wrap input {
+  width: 100%;
+  padding: 0.75rem 1rem 0.75rem 2.6rem;
+  border-radius: 14px;
+  border: 1px solid #dde1ec;
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.auth-input-wrap input:focus {
+  border-color: #02006c;
+  box-shadow: 0 0 0 3px rgba(2, 0, 108, 0.12);
+}
+
+.auth-input-wrap.has-error input {
+  border-color: #dc2626;
+}
+
+.auth-input-wrap.has-error svg {
+  color: #dc2626;
+}
+
+.auth-input-wrap.with-toggle input {
+  padding-right: 2.8rem;
+}
+
+.auth-field-toggle {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: #02006c;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.auth-field-toggle svg {
+  position: static;
+  color: inherit;
+  opacity: 1;
+}
+
+.auth-field-error {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.auth-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  margin-top: -0.3rem;
+}
+
+.auth-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4b5061;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.auth-checkbox input {
+  accent-color: #02006c;
+  width: 15px;
+  height: 15px;
+}
+
+.auth-link,
+.auth-link-muted {
+  color: #02006c;
+  font-weight: 800;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.auth-link-muted[aria-disabled="true"] {
+  color: #9aa0b4;
+  cursor: default;
+  pointer-events: none;
+  text-decoration: none;
+}
+
+.auth-alert {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 0.6rem 0.85rem;
+}
+
+.auth-submit {
+  margin-top: 0.25rem;
+  width: 100%;
+  padding: 0.85rem;
+  border-radius: 16px;
+  border: none;
+  background: #02006c;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(2, 0, 108, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.auth-submit:hover:not(:disabled) {
+  background: #04018f;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(2, 0, 108, 0.28);
+}
+
+.auth-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-switch {
+  margin-top: 1.25rem;
+  text-align: center;
+  font-size: 0.825rem;
+  color: #6b7280;
+}

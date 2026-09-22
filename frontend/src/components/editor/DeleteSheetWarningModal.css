@@ -1,0 +1,87 @@
+.delete-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 60;
+}
+
+.delete-sheet-card {
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+}
+
+.delete-sheet-card h2 {
+  font-size: 17px;
+  margin: 0 0 8px;
+  color: var(--danger);
+}
+
+.delete-sheet-target {
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0 0 12px;
+}
+
+.delete-sheet-card p {
+  color: var(--text);
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.delete-sheet-dependents {
+  margin: 0 0 20px;
+  padding-left: 20px;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.delete-sheet-dependents li {
+  margin: 2px 0;
+}
+
+.delete-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.delete-sheet-cancel-btn {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.delete-sheet-cancel-btn:hover {
+  background: var(--code-bg);
+}
+
+.delete-sheet-confirm-btn {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.delete-sheet-confirm-btn:hover {
+  opacity: 0.9;
+}

@@ -1,0 +1,243 @@
+:root {
+  /* SheetFlow palette: blue / white / grey. */
+  --text: #475467;
+  --text-h: #101828;
+  --bg: #fff;
+  --surface: #fff;
+  --border: #e4e7ec;
+  --code-bg: #f4f4f4;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-bg: rgba(37, 99, 235, 0.08);
+  --accent-border: rgba(37, 99, 235, 0.5);
+  --danger: #d92d20;
+  --danger-bg: rgba(217, 45, 32, 0.08);
+  --social-bg: rgba(244, 244, 244, 0.5);
+  --shadow:
+    rgba(16, 24, 40, 0.1) 0 10px 15px -3px, rgba(16, 24, 40, 0.05) 0 4px 6px -2px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+/* Three-state theming: bare :root above is the light default. The OS-preference media query
+   below applies dark values automatically, but only when the user hasn't explicitly picked
+   "Light" in Settings (:not([data-theme="light"]) guard) — and an explicit [data-theme="dark"]
+   picked in Settings always wins over both, in either direction. ThemeContext is what sets
+   data-theme on <html> ("light" | "dark" | removed entirely for "system"). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --text: #9ca3af;
+    --text-h: #f3f4f6;
+    --bg: #16171d;
+    --surface: #1d1f27;
+    --border: #2e303a;
+    --code-bg: #1f2028;
+    --accent: #3b82f6;
+    --accent-hover: #60a5fa;
+    --accent-bg: rgba(59, 130, 246, 0.15);
+    --accent-border: rgba(59, 130, 246, 0.5);
+    --danger: #f97066;
+    --danger-bg: rgba(249, 112, 102, 0.12);
+    --social-bg: rgba(47, 48, 58, 0.5);
+    /* AppShell's sidebar keeps its own navy brand hue (#02006c, the light-mode default) rather
+       than switching to a neutral gray — but at full saturation it visually "pops" against the
+       desaturated --bg/--surface tones around it (reported directly: "looks weird in darkmode").
+       Same hue, muted down to match how saturated the rest of dark mode actually is. */
+    --sidebar-bg: #262a52;
+    --sidebar-hover: #363b73;
+    --shadow:
+      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  }
+}
+
+:root[data-theme="dark"] {
+  --text: #9ca3af;
+  --text-h: #f3f4f6;
+  --bg: #16171d;
+  --surface: #1d1f27;
+  --border: #2e303a;
+  --code-bg: #1f2028;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-bg: rgba(59, 130, 246, 0.15);
+  --accent-border: rgba(59, 130, 246, 0.5);
+  --danger: #f97066;
+  --danger-bg: rgba(249, 112, 102, 0.12);
+  --social-bg: rgba(47, 48, 58, 0.5);
+  --sidebar-bg: #262a52;
+  --sidebar-hover: #363b73;
+  --shadow:
+    rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+}
+
+/* Univer (mounted as a plain DOM node — see univer/UniverSheetGrid.tsx) is given its own
+   `darkMode` flag wired to this app's actual [data-theme] setting, and that's enough for its
+   real, coordinated theme (toolbar, grid, font dropdown, cell-reference box) to render
+   correctly in either mode. But Univer's *bundled* CSS also ships some Tailwind `dark:`
+   utility classes that react directly to the OS-level prefers-color-scheme media query,
+   completely independent of the `darkMode` flag it was actually given. Those two mechanisms
+   only ever disagree in one real case — confirmed live: the app's theme explicitly set to
+   Light while the OS/browser itself prefers dark — where Univer's own theme correctly renders
+   light, but those leftover classes still fire as if it were dark, producing invisible
+   white-on-white menu text and a dark cell-reference "Name Box" sitting oddly in an otherwise
+   light toolbar. Scoped to `[data-theme="light"]` specifically — not just the media query
+   alone — so this never fires when the app (and Univer) are actually showing dark, where
+   Univer's own dark background already matches these same classes correctly. Within this
+   scope there's no genuine dark surface anywhere to contrast against, so unlike a real dark
+   theme this doesn't need exceptions — every one of these classes gets neutralized back to
+   its light-mode equivalent, not just re-paired with a matching dark counterpart. */
+@media (prefers-color-scheme: dark) {
+  /* Excludes elements that also carry a bare (non dark:-prefixed) univer-bg-gray-700 class —
+     those are tooltip-style bubbles that are *always* a dark bubble with white text by design,
+     in either app theme (their `dark:` variant pair, e.g. on the "Taille de police" hover
+     tooltip, inverts to a light bg + dark text, but that variant is inactive here since
+     Univer's own darkMode is false in light mode) — forcing their text dark here left dark text
+     stranded on their still-dark bubble. */
+  :root[data-theme="light"] [class*="univer-text-white"]:not([class~="univer-bg-gray-700"]) {
+    color: #1b1c1f !important;
+  }
+  /* The Name Box has no plain (non dark:) background utility at all — its light-mode
+     appearance is simply transparent, showing the toolbar behind it. */
+  :root[data-theme="light"] [class*="univer-bg-gray-900"] {
+    background-color: transparent !important;
+  }
+  /* Toolbar buttons pair their dark text override with an always-present light-mode hover
+     highlight (`hover:univer-bg-gray-100`) *and* a dark-mode-only hover override
+     (`dark:hover:!univer-bg-gray-700`) — restore the intended light hover color specifically,
+     rather than just clearing it to transparent and losing hover feedback entirely. */
+  :root[data-theme="light"] [class*="univer-bg-gray-700"]:hover {
+    background-color: #f3f4f6 !important;
+  }
+}
+
+#root {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) {
+    font-size: 36px;
+    margin: 20px 0;
+  }
+}
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) {
+    font-size: 20px;
+  }
+}
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--mono);
+  display: inline-flex;
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
+
+/* ---- Shared loading UI (LoadingState + inline button spinners) ----
+   A separate keyframe from EditorPage.css's own `editor-spin` (used only by
+   SaveStatusIndicator) — deliberately not touched/shared, so this new, broader rollout can't
+   regress that already-proven, real-user-facing indicator. */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 24px;
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+}
+
+.loading-state-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading-progress-track {
+  width: 180px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}

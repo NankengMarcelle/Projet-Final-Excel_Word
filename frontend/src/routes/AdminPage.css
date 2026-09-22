@@ -1,0 +1,88 @@
+.admin-main {
+  /* Same fix as WorkspacePage.css's .workspace-main — 1040px read as broken/unresponsive next
+     to the full-width header on a large monitor. */
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+  box-sizing: border-box;
+}
+
+.admin-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 20px;
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
+.admin-status {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.admin-status-error {
+  color: var(--danger);
+}
+
+.admin-table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(2, 0, 108, 0.05);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 12px 20px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-table td {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-h);
+}
+
+.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.admin-badge-admin {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.admin-badge-active {
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+}
+
+.admin-badge-inactive {
+  background: var(--danger-bg);
+  color: var(--danger);
+}

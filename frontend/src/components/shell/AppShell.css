@@ -1,0 +1,581 @@
+/* ANTIC-matching app shell: navy sidebar + themed header, wrapping every authenticated page
+   except the editor (see AppShell.tsx). Colors ported from the colleague's UI prototype design
+   tokens (--navy-primary #02006c etc.), same as AuthPage.css originally. The sidebar itself stays
+   fixed navy brand chrome in every theme (it already reads fine as-is — dark background, light
+   text — so there's nothing to adapt); everything below it (header, search, account menu) uses
+   the app's theme variables so the main content area actually responds to dark mode, matching
+   WorkspacePage.css/AdminPage.css, which were already theme-aware — this file just hadn't caught
+   up, which is what made dark-mode text unreadable against a background stuck in light mode. */
+.shell {
+  display: flex;
+  min-height: 100svh;
+  background: var(--bg);
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+}
+
+/* ---- Sidebar (fixed brand navy — deliberately not theme-aware, see file header comment) ---- */
+
+.shell-sidebar {
+  width: 232px;
+  min-width: 232px;
+  height: 100svh;
+  position: sticky;
+  top: 0;
+  background: var(--sidebar-bg, #02006c);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex-shrink: 0;
+  transition: width 0.18s ease, min-width 0.18s ease;
+}
+
+/* ---- Collapsed: icon-only rail. Text/tagline/flag hidden via width+opacity so the collapse
+   itself animates smoothly rather than content just vanishing mid-transition. ---- */
+
+.shell-sidebar.collapsed {
+  width: 72px;
+  min-width: 72px;
+}
+
+.shell-sidebar.collapsed .shell-sidebar-name,
+.shell-sidebar.collapsed .shell-sidebar-tagline,
+.shell-sidebar.collapsed .shell-flag-ribbon,
+.shell-sidebar.collapsed .shell-nav-item span,
+.shell-sidebar.collapsed .shell-logout-btn span {
+  display: none;
+}
+
+.shell-sidebar.collapsed .shell-sidebar-logo {
+  width: 40px;
+  height: 40px;
+}
+
+.shell-sidebar.collapsed .shell-sidebar-logo img {
+  width: 26px;
+  height: 26px;
+}
+
+.shell-sidebar.collapsed .shell-nav-item,
+.shell-sidebar.collapsed .shell-logout-btn {
+  justify-content: center;
+  padding: 0.6rem;
+}
+
+.shell-sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.2rem 1rem 1rem;
+}
+
+.shell-sidebar-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  margin-bottom: 0.6rem;
+  flex-shrink: 0;
+  transition: width 0.18s ease, height 0.18s ease;
+}
+
+.shell-sidebar-logo img {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+}
+
+.shell-sidebar-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
+.shell-sidebar-tagline {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #e0e7ff;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.shell-flag-ribbon {
+  width: 100%;
+  height: 6px;
+  display: flex;
+  margin: 0.2rem 0 1.2rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.shell-flag-band {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.shell-flag-green {
+  background: #007a3d;
+}
+
+.shell-flag-red {
+  background: #ce1126;
+}
+
+.shell-flag-red svg {
+  position: absolute;
+}
+
+.shell-flag-yellow {
+  background: #fcd116;
+}
+
+.shell-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 0.75rem;
+}
+
+.shell-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: 14px;
+  border: none;
+  background: transparent;
+  color: #e0e7ff;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.shell-nav-item svg {
+  flex-shrink: 0;
+}
+
+.shell-nav-item:hover:not(.disabled):not(.active) {
+  /* A solid, distinct color rather than a translucent white overlay — the low-opacity
+     rgba() version read as a washed-out/see-through glitch against the navy background
+     instead of a deliberate hover state. Excludes .active: without :not(.active) here, this
+     rule's higher specificity (:hover adds a pseudo-class) wins over .active's plain background,
+     so hovering the already-selected white item incorrectly overrode it with this dark fill. */
+  background: var(--sidebar-hover, #1e1b8f);
+}
+
+.shell-nav-item.active {
+  background: #fff;
+  color: #02006c;
+  font-weight: 800;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.shell-nav-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.shell-sidebar-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.shell-collapse-btn {
+  color: #e0e7ff;
+}
+
+.shell-logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  border-radius: 14px;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  box-sizing: border-box;
+}
+
+.shell-logout-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ---- Main column ---- */
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-content {
+  flex: 1;
+  /* Extra breathing room below the header, on top of whatever top padding the page itself
+     already has (WorkspacePage/AdminPage both use 32px) — applied here once, universally,
+     rather than in each page, so it stays consistent for any future page under the shell. */
+  padding-top: 14px;
+}
+
+/* ---- Header ---- */
+
+.shell-header {
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+}
+
+/* All three header controls (search, lang toggle, account pill) share this height so they
+   read as one consistent row instead of three different sizes (the search bar and account
+   pill were previously sized by their own padding/avatar math rather than to a common value). */
+.shell-search,
+.shell-lang-toggle,
+.shell-account-pill {
+  height: 36px;
+  box-sizing: border-box;
+}
+
+.shell-search {
+  position: relative;
+  width: 320px;
+  max-width: 36vw;
+  display: flex;
+  align-items: center;
+}
+
+.shell-search svg {
+  position: absolute;
+  left: 14px;
+  color: var(--accent);
+  opacity: 0.8;
+  pointer-events: none;
+  width: 15px;
+  height: 15px;
+}
+
+.shell-search input {
+  width: 100%;
+  height: 100%;
+  padding: 0 0.9rem 0 2.4rem;
+  border-radius: 30px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  font-family: inherit;
+  font-size: 0.775rem;
+  font-weight: 600;
+  color: var(--text-h);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.shell-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.shell-lang-toggle {
+  display: flex;
+  align-items: center;
+  background: var(--code-bg);
+  border-radius: 20px;
+  padding: 3px;
+  border: 1px solid var(--border);
+}
+
+.shell-lang-toggle button {
+  height: 100%;
+  padding: 0 0.6rem;
+  border-radius: 16px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-weight: 800;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.shell-lang-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.shell-account {
+  position: relative;
+}
+
+.shell-account-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.75rem 0 0.25rem;
+  border-radius: 30px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.shell-account-pill:hover {
+  background: var(--border);
+}
+
+.shell-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.shell-account-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1;
+}
+
+.shell-account-name {
+  font-size: 0.725rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1.1;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-account-role {
+  font-size: 0.6rem;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 1px;
+}
+
+.shell-account-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(2, 0, 108, 0.15);
+  padding: 8px;
+  z-index: 30;
+  text-align: left;
+}
+
+.shell-account-menu-header {
+  padding: 8px 10px 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.shell-account-menu-name {
+  font-weight: 800;
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.shell-account-menu-email {
+  font-size: 0.725rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-account-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.shell-account-menu-item:hover {
+  background: var(--code-bg);
+}
+
+/* ---- Mobile hamburger / drawer close button: both hidden above the mobile breakpoint, since
+   the sidebar is permanently visible there and neither one has anything to do. ---- */
+
+.shell-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.shell-hamburger:hover {
+  background: var(--code-bg);
+}
+
+.shell-sidebar-close {
+  display: none;
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+}
+
+.shell-sidebar-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.shell-backdrop {
+  display: none;
+}
+
+/* ---- Mobile: sidebar becomes an off-canvas drawer instead of a fixed-width flex item.
+   Previously there was no responsive behavior here at all — a non-shrinking 232px (or 72px
+   collapsed) sidebar sat in a flex row with the rest of the page on every viewport, so on a
+   phone screen the main content was squeezed into whatever width was left, forcing heavy
+   text-wrapping and a page far taller than its content needed ("hangs vertically" on real mobile
+   browsers, reported directly). Below this breakpoint the sidebar is taken out of the flex flow
+   (position: fixed) and hidden off-screen by default, so .shell-main gets the full viewport
+   width; it slides in as an overlay only when the header's hamburger button opens it. */
+@media (max-width: 768px) {
+  .shell-hamburger {
+    display: flex;
+  }
+
+  .shell-search {
+    max-width: 46vw;
+  }
+
+  .shell-account-text {
+    display: none;
+  }
+
+  .shell-account-pill {
+    padding: 0;
+    border: none;
+    background: none;
+  }
+
+  .shell-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 40;
+    width: 260px;
+    min-width: 260px;
+    max-width: 82vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  /* Always show the full labeled sidebar when opened as an overlay, regardless of the desktop
+     "collapsed" icon-rail preference — an icon-only drawer would be pointless here since it's
+     hidden entirely otherwise, there's no width to save. */
+  .shell-sidebar.collapsed {
+    width: 260px;
+    min-width: 260px;
+  }
+
+  .shell-sidebar.collapsed .shell-sidebar-name,
+  .shell-sidebar.collapsed .shell-sidebar-tagline,
+  .shell-sidebar.collapsed .shell-flag-ribbon,
+  .shell-sidebar.collapsed .shell-nav-item span,
+  .shell-sidebar.collapsed .shell-logout-btn span {
+    display: block;
+  }
+
+  .shell-sidebar.mobile-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .shell-sidebar-close {
+    display: flex;
+  }
+
+  /* No effect in drawer mode (width is forced open above), so hiding it avoids a control that
+     visibly does nothing when tapped. */
+  .shell-collapse-btn {
+    display: none;
+  }
+
+  .shell-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 0, 108, 0.4);
+    z-index: 35;
+  }
+}

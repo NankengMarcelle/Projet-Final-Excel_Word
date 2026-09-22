@@ -1,0 +1,658 @@
+.editor-page {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  /* Matches .shell-content's backdrop (AppShell.css) even though the editor route isn't
+     wrapped in AppShell — keeps the grey-behind-a-white-surface feel consistent app-wide. */
+  background: #f8fafc;
+}
+
+.editor-status {
+  padding: 24px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* ---- Chrome: one consolidated title row (filename, Save, workbook actions), plus an optional
+   child-sheet sync strip that only renders once child sheets exist. Collapsible together via
+   the toggle at the end of the title row (Google-Sheets-style), leaving only Fortune-sheet's
+   own native UI on screen. ---- */
+
+.editor-chrome {
+  /* Navy (#02006c), matching the app shell's sidebar/header — ported the same way AppShell.css
+     ported it from the colleague's UI, since the editor route intentionally isn't wrapped in
+     AppShell (see EditorPage's own layout note in router.tsx) but should still read as the same
+     app, not a visually separate light-grey tool bolted on. Not theme-aware, same reasoning as
+     the shell/auth chrome: fixed brand identity, not a light/dark surface. */
+  background: #02006c;
+  color: #fff;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  transition: max-height 0.18s ease, opacity 0.15s ease;
+}
+
+.editor-chrome.expanded {
+  /* One compact row (~44px) most of the time; the child-sheet sync strip adds to this only
+     when it actually renders, so this cap has headroom for that case without reserving space
+     for it when there's nothing to sync. */
+  max-height: 110px;
+  opacity: 1;
+  border-bottom: none;
+  box-shadow: 0 2px 10px rgba(2, 0, 108, 0.15);
+}
+
+.editor-chrome.collapsed {
+  max-height: 0;
+  opacity: 0;
+  border-bottom: none;
+}
+
+.editor-topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+}
+
+.editor-topbar-spacer {
+  flex: 1;
+}
+
+.editor-topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.editor-back-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.editor-back-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.editor-back-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.editor-title-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.editor-filename,
+.editor-filename-input {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.editor-filename {
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 32vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-filename:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.editor-filename-input {
+  border: 1.5px solid #fff;
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.1);
+  font-family: inherit;
+  color: #fff;
+}
+
+.editor-settings-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.editor-settings-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.editor-settings-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ---- Collapse toggle: an inline button at the end of the toolbar row while expanded (mirrors
+   where Google Sheets puts its own "hide the menus" caret), plus a slim always-on-top strip
+   that appears only once collapsed, since the inline button collapses away with everything
+   else and something has to stay reachable to bring it back. ---- */
+
+.editor-collapse-toggle {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: #fff;
+  opacity: 0.65;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-collapse-toggle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.editor-collapse-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.editor-collapse-toggle svg.flip {
+  transform: rotate(180deg);
+}
+
+.editor-collapse-strip {
+  display: flex;
+  justify-content: center;
+  background: #02006c;
+}
+
+.editor-collapse-btn {
+  width: 100%;
+  border: none;
+  background: none;
+  color: #fff;
+  opacity: 0.65;
+  padding: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-collapse-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.editor-collapse-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.15s ease;
+}
+
+.editor-collapse-btn svg.flip {
+  transform: rotate(180deg);
+}
+
+/* ---- Manual save button ---- */
+
+.editor-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  /* Solid white pill on navy text — same "primary action" language as .shell-nav-item.active
+     in AppShell.css, rather than introducing a one-off green accent (the colleague's reference
+     uses green here, but our design system has no --success token elsewhere, so a lone green
+     button would be inconsistent instead of matching). Deliberately the most visually distinct
+     button in this row and the leftmost of the action buttons (right after Back) — mirroring
+     where Excel puts Save in its own title bar, rather than burying it among the others. */
+  border: none;
+  background: #fff;
+  color: #02006c;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 16px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.editor-save-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-save-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.editor-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---- Save status ---- */
+
+.save-status {
+  margin-left: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e0e7ff;
+}
+
+.save-status svg {
+  width: 15px;
+  height: 15px;
+}
+
+.save-status-saved svg {
+  color: #86efac;
+}
+
+.save-status-error {
+  color: #fca5a5;
+}
+
+.save-status-spinner {
+  animation: editor-spin 0.8s linear infinite;
+}
+
+@keyframes editor-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.toolbar-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-panel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.editor-panel-note {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.editor-panel-error {
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+.editor-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.editor-action-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.editor-action-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.editor-action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.editor-action-btn.small {
+  gap: 4px;
+  padding: 5px 9px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.editor-action-btn.small svg {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-action-btn.ghost {
+  /* Was white-on-navy, for the old always-visible sync-strip usage — every remaining use of
+     .ghost is now a Cancel/Close button inside a white .modal-card (ChildSheetModal,
+     ConvertToWordModal), where white text on white was rendering as an invisible button. */
+  background: none;
+  color: var(--text-h);
+  border: 1px solid var(--border);
+}
+
+.editor-action-btn.ghost:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+/* select/input base styling wherever they appear inside the toolbar or modal */
+.toolbar-panel select,
+.toolbar-panel input[type="text"],
+.modal-card select,
+.modal-card input[type="text"] {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-h);
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  background: var(--bg);
+  outline: none;
+}
+
+.toolbar-panel select:focus,
+.toolbar-panel input[type="text"]:focus,
+.modal-card select:focus,
+.modal-card input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+/* ---- Badges ---- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.badge-uptodate {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.badge-outdated {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ---- Child sheets dropdown: a single trigger button (matching Create Child Sheet/Convert's own
+   footprint in the title bar) that opens a popover listing every child sheet — replaces an
+   earlier design where this was its own always-visible, variable-length strip below the title
+   bar, which took up permanent space and looked out of place once there were several sheets. ---- */
+
+.child-sheets-outdated-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.child-sheets-menu {
+  /* Portaled to document.body (see ChildSheetSyncPanel.tsx) so .editor-chrome's own
+     `overflow: hidden` (needed for its collapse/expand animation) can't clip it — position is
+     viewport-relative (fixed), matching the coordinates getBoundingClientRect() hands back. */
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+  min-width: 280px;
+  max-width: 360px;
+}
+
+.child-sheets-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.child-sheets-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 6px 8px 6px 10px;
+  font-size: 12.5px;
+}
+
+.sync-chip-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-h);
+}
+
+/* ---- Grid ---- */
+
+.editor-grid-wrap {
+  /* flex column, not a plain block: a percentage height:100% on the grid's own wrapper below
+     doesn't reliably resolve against a flex-grow ancestor's computed size (a real, reproducible
+     flexbox quirk, confirmed live — the parent measures its correct height, but a percentage-
+     height child of it does not); giving that child `flex: 1` here instead sidesteps the
+     percentage-resolution question entirely and sizes correctly from Fortune-sheet's first paint.
+     Padding on all four sides now (was 0 on top) so the grid never sits flush against the
+     viewport or the navy chrome — see .editor-grid-card below for the actual "floating sheet"
+     surface this padding creates room for (now nearly flush — see below). */
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 1px;
+  box-sizing: border-box;
+}
+
+.editor-grid-card {
+  /* The grid as its own white, rounded surface floating on .editor-page's grey backdrop —
+     same idea as a real spreadsheet app framing the sheet as a distinct area, not raw canvas
+     touching the window edges. overflow:hidden clips Fortune-sheet's own square corners to
+     match the rounded card. */
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  width: 100%;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(2, 0, 108, 0.08);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.editor-grid-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.editor-grid-error-detail {
+  font-size: 12.5px;
+  color: var(--text);
+  font-family: var(--mono);
+  max-width: 480px;
+  word-break: break-word;
+}
+
+/* ---- Footer status bar ---- */
+
+.editor-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 24px;
+  font-size: 12px;
+  color: var(--text);
+  background: #f8fafc;
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Modal ---- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+
+.modal-card {
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.modal-title {
+  margin: 0 0 16px;
+  font-size: 18px;
+  color: var(--text-h);
+}
+
+.modal-subtitle {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.child-sheet-source-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 14px 4px;
+  margin-bottom: 14px;
+}
+
+.child-sheet-source-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.child-sheet-source-section-header .modal-subtitle {
+  margin: 0;
+}
+
+/* ---- Column picker / filter group ---- */
+
+.column-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+.column-picker legend {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0 4px;
+}
+
+.column-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-h);
+  margin-bottom: 4px;
+}
+
+.filter-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--code-bg);
+}
+
+.filter-condition-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
