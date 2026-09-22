@@ -1,0 +1,24 @@
+# Secrets — never commit real values (see .env.example for the template)
+.env
+.env.supabase-verify
+
+# Virtual environment
+venv/
+
+# Uploaded workbooks / generated Word docs — user data, not source
+storage/
+
+# Leftover atomic-write temp files from a race-condition test run against real data
+scratch_race_test.xlsx.*.tmp
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Personal Claude Code permission allowlist — machine/session-specific, not project config
+.claude/settings.local.json

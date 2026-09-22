@@ -1,0 +1,26 @@
+# Secrets — never bake real values into an image (see .env.example for the template)
+.env
+.env.supabase-verify
+
+# Virtual environment — the image installs its own dependencies fresh
+venv/
+
+# Uploaded workbooks / generated Word docs — user data, not source; the image creates its own
+# empty storage/ dir, and docker-compose.yml mounts a volume over it at runtime
+storage/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Personal Claude Code permission allowlist — machine/session-specific, not project config
+.claude/settings.local.json
+
+# Git metadata and leftover scratch files never need to be in the build context
+.git/
+scratch_race_test.xlsx.*.tmp
