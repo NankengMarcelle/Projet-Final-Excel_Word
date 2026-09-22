@@ -8,6 +8,9 @@ venv/
 # Uploaded workbooks / generated Word docs — user data, not source
 storage/
 
+# Leftover atomic-write temp files from a race-condition test run against real data
+scratch_race_test.xlsx.*.tmp
+
 # Python
 __pycache__/
 *.pyc

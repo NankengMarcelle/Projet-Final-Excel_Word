@@ -659,6 +659,62 @@ then reloaded the page and confirmed Univer's own snapshot reconstructed every o
 identically (including the conditional-format rule actually repainting red on the matching
 cells and the autofilter actually hiding the non-matching row).
 
+### Dockerizing for a self-hosted VM (no Supabase)
+
+Deployment today is Render (backend) + Vercel (frontend) + Supabase (Postgres + S3-compatible
+storage). The plan for a company-provided VM deployment is to run everything self-hosted
+instead — Postgres in its own container on the VM, uploaded files on the VM's own disk — rather
+than keep depending on Supabase for either. This needed **zero application code changes**: the
+backend already had no Supabase-specific assumptions anywhere (`app/db/session.py` is a plain
+`create_engine(settings.DATABASE_URL)`, and `STORAGE_BACKEND=local` — the existing default,
+already what local dev uses — is a complete, already-working code path; see `excel_io.py`'s
+`_is_s3_backend()`). Moving off Supabase was purely an infra/config exercise.
+
+`backend/Dockerfile` mirrors `render.yaml`'s own already-proven `startCommand` exactly
+(`alembic upgrade head && uvicorn ...`) — no new, untested startup sequence for this target.
+`docker-compose.yml` (repo root, alongside `render.yaml` — same "each repo owns its own
+deployment config" precedent `vercel.json` also follows in the frontend repo) runs this image
+next to a plain `postgres:16-alpine` container, with two named volumes:
+
+- `pgdata` — Postgres's own data directory, survives the container being recreated.
+- `storage_data` — mounted at `STORAGE_ROOT=/data/storage` inside the backend container. This
+  is the fix for local-disk storage otherwise being lost on every container recreation (a plain
+  container's own filesystem is ephemeral) — verified live: uploaded a workbook, ran
+  `docker compose restart backend` (not `down`+`up`, which wouldn't have tested anything about
+  the volume), and confirmed the file was still there and downloadable afterward.
+
+Secrets follow the same split `backend/.env`/`.env.example` already uses: a gitignored
+`.env.docker` (repo root) holds real values, `.env.docker.example` is the committed template.
+`POSTGRES_USER`/`PASSWORD`/`DB` double as both the values Postgres's own image uses to create
+that database on first startup *and* the values `docker-compose.yml` assembles `DATABASE_URL`
+from for the backend service — one place to change them, not two kept in sync by hand.
+
+**The frontend doesn't need compose** — it's a single stateless container with one build
+argument, not an orchestration problem. `Dockerfile` is a multi-stage build: a `node:20-alpine`
+stage runs `npm ci && npm run build`, then an `nginx:alpine` stage serves the resulting `dist/`.
+The one real gotcha: Vite bakes `import.meta.env.VITE_API_BASE_URL` into the JS bundle at
+**build time**, not read at container startup — so it has to be passed as a Docker build `ARG`
+(`docker build --build-arg VITE_API_BASE_URL=...`), turned into an `ENV` var *before* `npm run
+build` runs in the Dockerfile. Passing it as a `docker run -e` value instead would silently have
+no effect at all, since by then the bundle is already built. `nginx.conf` mirrors `vercel.json`'s
+own SPA-fallback rewrite rule (`try_files $uri /index.html`) — same behavior, different platform.
+
+**Explicitly not done yet**: the actual one-time data migration off Supabase (Postgres via
+`pg_dump`/`pg_restore`, files via downloading everything out of Supabase Storage into the new
+volume) — there's no VM to migrate *to* yet, so this is documented here for when there is one,
+not executed:
+
+```bash
+# Postgres: dump from Supabase, restore into the self-hosted container
+pg_dump "$SUPABASE_DATABASE_URL" -Fc -f sheetflow_dump.pgdump
+docker compose exec -T db pg_restore -U <POSTGRES_USER> -d <POSTGRES_DB> --clean --if-exists < sheetflow_dump.pgdump
+
+# Storage: download every object out of the Supabase bucket into the storage_data volume's
+# mount point (e.g. via `aws s3 sync` pointed at Supabase's S3-compatible endpoint, or the
+# Supabase dashboard's own bucket browser for a one-off), preserving the workbooks/<owner_id>/
+# and conversions/ layout excel_io.py's own path functions already expect.
+```
+
 ## Frontend (`sheet_Flow_frontend/`)
 
 ### Setup & running
