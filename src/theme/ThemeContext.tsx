@@ -21,7 +21,11 @@ function applyTheme(theme: ThemePreference): void {
 
 function readStoredTheme(): ThemePreference {
   const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === "light" || stored === "dark" ? stored : "system";
+  // Default to light for anyone who hasn't explicitly picked a theme yet (via Settings), rather
+  // than following the OS's prefers-color-scheme — "system" (which never itself gets persisted,
+  // see setTheme below) is still a real, selectable option, just no longer the implicit starting
+  // point for a first-time visitor.
+  return stored === "light" || stored === "dark" ? stored : "light";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
