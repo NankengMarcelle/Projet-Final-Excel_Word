@@ -2,6 +2,29 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { createUniver, LocaleType, defaultTheme, type IWorkbookData, type IWorksheetData } from "@univerjs/presets";
 
 type UniverAPI = ReturnType<typeof createUniver>["univerAPI"];
+
+// Univer's formula engine recalculates — and, critically, rewrites a shifted formula's own
+// reference text (e.g. "L12" -> "L13") — asynchronously, on its own schedule, not as part of
+// the structural mutation itself. A 15s cap is a safety net (calculationEnd should always
+// fire once executeCalculation() is called), not an expected wait — proceeding without
+// having settled beats hanging this forever if that assumption is ever wrong.
+function waitForFormulaCalculation(univerAPI: UniverAPI): Promise<void> {
+  const formula = univerAPI.getFormula();
+  if (!formula) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      disposable.dispose();
+      clearTimeout(timer);
+      resolve();
+    };
+    const disposable = formula.calculationEnd(finish);
+    const timer = setTimeout(finish, 15000);
+    formula.executeCalculation();
+  });
+}
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
 import { UniverSheetsFilterPreset } from "@univerjs/preset-sheets-filter";
 import { UniverSheetsSortPreset } from "@univerjs/preset-sheets-sort";
@@ -187,7 +210,14 @@ export interface UniverSheetGridHandle {
   // "Insert/delete row and column" section's totals finding). Returned row/column are
   // 1-indexed, matching this app's convention everywhere else. Returns an empty array if the
   // worksheet isn't found (e.g. a stale id after a delete).
-  getComputedValues: (worksheetId: string) => ComputedCellValue[];
+  //
+  // Async, and forces+awaits a full recalculation first (see the implementation's own comment)
+  // — Univer's formula engine calculates in the background, and reading getDataRange() without
+  // waiting for it to finish silently returns whatever happens to be already resolved at that
+  // exact moment. Confirmed live against a real 26-sheet workbook: a child sheet filtered on a
+  // formula column came back with only 1 of many matching rows, because most of that column's
+  // cells hadn't been calculated yet when the (previously synchronous) read happened.
+  getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
   // Reads a worksheet's *current* merges/freeze/column-row sizing/conditional formatting/data
   // validation/autofilter state directly off live Univer data — called fresh at save time
   // (useDebouncedAutosave.ts), never cached from whenever a metadata command last fired, so
@@ -253,9 +283,15 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
         approvedDeletionsRef.current.add(worksheetId);
         univerAPIRef.current?.getActiveWorkbook()?.deleteSheet(worksheetId);
       },
-      getComputedValues: (worksheetId: string) => {
+      getComputedValues: async (worksheetId: string) => {
         const worksheet = univerAPIRef.current?.getActiveWorkbook()?.getSheetBySheetId(worksheetId);
         if (!worksheet) return [];
+        // Force a full recalculation and wait for it to actually finish before trusting
+        // anything getDataRange() reports below — see waitForFormulaCalculation's own
+        // comment. Without this, getValues() just returns whatever subset of cells happened
+        // to already be resolved at the moment this is called, which for a large workbook can
+        // be a small, arbitrary fraction of the real column.
+        if (univerAPIRef.current) await waitForFormulaCalculation(univerAPIRef.current);
         // getDataRange() mirrors Excel's own "used range" concept — scanning exactly that
         // (not the sheet's full declared row/column count, which can be dramatically larger
         // than any real content) for formula cells specifically. getFormulas() returns an
@@ -500,7 +536,7 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
       }
     });
 
-    const commandDisposable = univerAPI.onCommandExecuted((commandInfo) => {
+    const commandDisposable = univerAPI.onCommandExecuted(async (commandInfo) => {
       if (commandInfo.id === REMOVE_SHEET_COMMAND_ID) {
         // Fires once the deletion has actually happened — for the plain "no dependents" case
         // (never intercepted below) and equally for a re-issued, already-approved delete via
@@ -541,8 +577,15 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
       const isRowOp = operation === "insert_row" || operation === "remove_row";
       const startIndex = (isRowOp ? range.startRow : range.startColumn) + 1;
       const count = (isRowOp ? range.endRow - range.startRow : range.endColumn - range.startColumn) + 1;
-      // onCommandExecuted fires after the mutation has already run, so save() here reflects
-      // the post-shift state, not the pre-shift one.
+      // onCommandExecuted fires after the mutation has already run, so the shifted cells'
+      // *positions*/values are already correct — but Univer's formula engine rewrites a
+      // shifted formula's own reference text (e.g. "L12" -> "L13") asynchronously, on its own
+      // schedule, not synchronously as part of the mutation. Confirmed live: deleting a row
+      // displayed correctly on screen (the grid re-rendered once Univer's async pass caught
+      // up), but a save() taken synchronously right here — before this same wait was added —
+      // captured stale, pre-rewrite formula text, so every surviving formula below the
+      // deleted row was saved one row off from what was already visibly correct on screen.
+      await waitForFormulaCalculation(univerAPI);
       const freshSnapshot = univerAPI.getActiveWorkbook()?.save();
       if (!freshSnapshot) return;
       onStructuralEditRef.current(subUnitId, operation, startIndex, count, freshSnapshot);

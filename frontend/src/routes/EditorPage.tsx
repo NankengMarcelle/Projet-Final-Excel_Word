@@ -56,7 +56,7 @@ function EditorWorkbookReady({
   worksheetDataList: WorksheetData[];
   onStatusChange: (status: SaveStatus) => void;
   onFlushReady: (flush: () => void) => void;
-  onComputedValuesReady: (fn: (worksheetId: string) => ComputedCellValue[]) => void;
+  onComputedValuesReady: (fn: (worksheetId: string) => Promise<ComputedCellValue[]>) => void;
 }) {
   const { lang } = useLang();
   const t = copy[lang];
@@ -187,7 +187,7 @@ function EditorWorkbookReady({
     // A stable wrapper, not gridRef.current itself — registered once, but reads gridRef.current
     // fresh on every call, so it keeps working across the ref being (re)attached (e.g. a
     // lang-triggered Univer recreate) without needing to re-register.
-    onComputedValuesReady((worksheetId) => gridRef.current?.getComputedValues(worksheetId) ?? []);
+    onComputedValuesReady((worksheetId) => gridRef.current?.getComputedValues(worksheetId) ?? Promise.resolve([]));
   }, [onComputedValuesReady]);
 
   return (
@@ -226,19 +226,45 @@ function EditorWorkbookReady({
 function EditorWorkbook({
   workbookId,
   worksheets,
+  queryVersion,
   onStatusChange,
   onFlushReady,
   onComputedValuesReady,
 }: {
   workbookId: string;
   worksheets: WorksheetRead[];
+  // Identical to the `key` this component itself is mounted with (see EditorPage's own
+  // worksheetListKey) — included in the query key below too, not just the React key, so a
+  // sync-triggered remount can never have its fresh fetch collide with a stale cache entry
+  // or in-flight request left over from the previous mount. Confirmed live as a real bug:
+  // `["worksheets", workbookId, worksheetIds]` alone doesn't change on a re-sync (no
+  // worksheet is added or removed, only an existing child's content changes), so even though
+  // this whole component remounts, React Query saw the *same* query key across the remount
+  // and could hand the freshly-mounted instance data from before the sync — a color change
+  // saved and confirmed durable on disk (verified directly against the backend) displayed as
+  // reverted after synchronizing a child sheet, purely because of this query-key collision,
+  // not because anything was actually lost.
+  queryVersion: string;
   onStatusChange: (status: SaveStatus) => void;
   onFlushReady: (flush: () => void) => void;
-  onComputedValuesReady: (fn: (worksheetId: string) => ComputedCellValue[]) => void;
+  onComputedValuesReady: (fn: (worksheetId: string) => Promise<ComputedCellValue[]>) => void;
 }) {
   const { lang } = useLang();
   const t = copy[lang];
-  const worksheetIds = worksheets.map((w) => w.id).join(",");
+  // Mirrors EditorPage's own worksheetListKey reasoning directly above this component: once
+  // this query has resolved data for a set of worksheets, a later deletion shrinking the
+  // `worksheets` prop shouldn't force a refetch of every SURVIVING sheet — this data is only
+  // ever read once, at mount, by EditorWorkbookReady below (which seeds Univer's initial
+  // snapshot; Univer owns everything live past that point, deletions included). Only grows to
+  // pick up a genuinely new worksheet (a created/synced child sheet); a shrink leaves this ref,
+  // and therefore the query key below, untouched, so the query doesn't re-run at all.
+  const fetchedWorksheetsRef = useRef<WorksheetRead[]>(worksheets);
+  const knownWorksheetIds = new Set(fetchedWorksheetsRef.current.map((w) => w.id));
+  if (worksheets.some((w) => !knownWorksheetIds.has(w.id))) {
+    fetchedWorksheetsRef.current = worksheets;
+  }
+  const worksheetsToFetch = fetchedWorksheetsRef.current;
+  const worksheetIds = worksheetsToFetch.map((w) => w.id).join(",");
   // Bumped from inside the fetch loop below so the loading state can show real "sheet X of Y"
   // progress instead of a static message for however long the sequential fetch takes. Reset to
   // 0 at the start of every queryFn run (not just on mount) so a refetch triggered by
@@ -254,11 +280,11 @@ function EditorWorkbook({
   // ~28s, while firing the same 16 requests in parallel made each individual one take 150-220s.
   // One at a time is dramatically faster here despite looking like the more "serial" choice.
   const { data: worksheetDataList, isLoading, error } = useQuery({
-    queryKey: ["worksheets", workbookId, worksheetIds],
+    queryKey: ["worksheets", workbookId, worksheetIds, queryVersion],
     queryFn: async () => {
       setLoadedCount(0);
       const results: WorksheetData[] = [];
-      for (const worksheet of worksheets) {
+      for (const worksheet of worksheetsToFetch) {
         results.push(await getWorksheet(workbookId, worksheet.id));
         setLoadedCount((count) => count + 1);
       }
@@ -341,11 +367,11 @@ export function EditorPage() {
   // formula values — needed by child-sheet create/sync so a stale/missing backend-side formula
   // cache (openpyxl has no formula engine) doesn't leave totals blank. See CLAUDE.md's
   // "Insert/delete row and column" section for the real workbook this was found against.
-  const computedValuesRef = useRef<(worksheetId: string) => ComputedCellValue[]>(
-    () => []
+  const computedValuesRef = useRef<(worksheetId: string) => Promise<ComputedCellValue[]>>(
+    async () => []
   );
   const handleComputedValuesReady = useCallback(
-    (fn: (worksheetId: string) => ComputedCellValue[]) => {
+    (fn: (worksheetId: string) => Promise<ComputedCellValue[]>) => {
       computedValuesRef.current = fn;
     },
     []
@@ -381,11 +407,24 @@ export function EditorPage() {
         return a.position - b.position;
       })
     : [];
-  // A worksheet list key: creating/removing a child sheet (or syncing one) changes this,
-  // which remounts EditorWorkbook below so the affected sheet gets refetched and reflected
-  // in Fortune-sheet's native tab strip — same "dispose and recreate" approach used for the
-  // grid elsewhere.
-  const worksheetListKey = `${sortedWorksheets.map((w) => w.id).join(",")}|${syncVersion}`;
+  // A worksheet list key that only ever GROWS, never shrinks — remounting EditorWorkbook is
+  // only actually needed to inject a worksheet Univer's live instance was never initialized
+  // with (a newly created or freshly synced child sheet; UniverSheetGrid's workbookData prop is
+  // read once at mount and Univer owns everything past that point — see its own
+  // currentSnapshotRef comment). A *deletion* needs no remount at all: it's already reflected
+  // in Univer's live model the moment it happens (handleSheetDeleted only fires after Univer's
+  // own model has removed the sheet), so keying this off the raw current ID list — which
+  // shrinks on delete — was forcing a full remount-and-refetch of every remaining sheet for a
+  // change the grid had already applied itself. Left over from before the Fortune-sheet ->
+  // Univer migration, when a full recreate really was needed either direction.
+  const mountedWorksheetIdsRef = useRef<string[]>([]);
+  const currentWorksheetIds = sortedWorksheets.map((w) => w.id);
+  const knownWorksheetIds = new Set(mountedWorksheetIdsRef.current);
+  const hasNewWorksheet = currentWorksheetIds.some((id) => !knownWorksheetIds.has(id));
+  if (hasNewWorksheet || mountedWorksheetIdsRef.current.length === 0) {
+    mountedWorksheetIdsRef.current = currentWorksheetIds;
+  }
+  const worksheetListKey = `${mountedWorksheetIdsRef.current.join(",")}|${syncVersion}`;
 
   // Whichever original worksheet is first is a reasonable default parent to preselect —
   // the modal itself lets the user change which parent sheet to derive from.
@@ -427,6 +466,7 @@ export function EditorPage() {
       {workbookId && sortedWorksheets.length > 0 && (
         <EditorWorkbook
           key={worksheetListKey}
+          queryVersion={worksheetListKey}
           workbookId={workbookId}
           worksheets={sortedWorksheets}
           onStatusChange={setSaveStatus}

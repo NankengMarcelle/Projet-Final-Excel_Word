@@ -25,7 +25,7 @@ interface EditorTopBarProps {
   onCreateChildSheet: () => void;
   onChildSheetSynced: () => void;
   onToggleCollapsed: () => void;
-  getComputedValues: (worksheetId: string) => ComputedCellValue[];
+  getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
 }
 
 // A single row now, not two stacked bars: filename/Save on the left (Save leftmost among the

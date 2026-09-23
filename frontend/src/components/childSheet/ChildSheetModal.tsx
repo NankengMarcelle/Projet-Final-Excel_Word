@@ -26,7 +26,7 @@ export function ChildSheetModal({
   defaultParentWorksheetId: string;
   onClose: () => void;
   onCreated: (childWorksheetId: string) => void;
-  getComputedValues: (worksheetId: string) => ComputedCellValue[];
+  getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
 }) {
   const { lang } = useLang();
   const t = copy[lang];
@@ -38,10 +38,9 @@ export function ChildSheetModal({
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      createChildSheet(workbookId, {
-        child_sheet_name: childSheetName,
-        sources: sources.map((source) => ({
+    mutationFn: async () => {
+      const sourcesPayload = await Promise.all(
+        sources.map(async (source) => ({
           parent_worksheet_id: source.parentWorksheetId,
           header_start_row: source.headerStartRow,
           header_end_row: source.headerEndRow,
@@ -49,10 +48,16 @@ export function ChildSheetModal({
           filter_criteria: source.filterGroup,
           // Each parent's formula cells may have no valid backend-side cache at all (openpyxl
           // has no formula engine) — Univer, already rendering that parent live, has the real
-          // answer.
-          computed_values: getComputedValues(source.parentWorksheetId),
-        })),
-      }),
+          // answer. Awaited: this forces (and waits out) a full recalculation first, see
+          // getComputedValues' own comment for why that's not optional.
+          computed_values: await getComputedValues(source.parentWorksheetId),
+        }))
+      );
+      return createChildSheet(workbookId, {
+        child_sheet_name: childSheetName,
+        sources: sourcesPayload,
+      });
+    },
     onSuccess: (response) => {
       void queryClient.invalidateQueries({ queryKey: ["workbooks", workbookId] });
       onCreated(response.worksheet.id);

@@ -25,7 +25,7 @@ export function ChildSheetSyncPanel({
   workbookId: string;
   worksheets: WorksheetRead[];
   onSynced: () => void;
-  getComputedValues: (worksheetId: string) => ComputedCellValue[];
+  getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
 }) {
   const { lang } = useLang();
   const t = copy[lang];
@@ -70,15 +70,18 @@ export function ChildSheetSyncPanel({
   });
 
   const mutation = useMutation({
-    mutationFn: (childWorksheetId: string) => {
+    mutationFn: async (childWorksheetId: string) => {
       const group = groups.find((g) => g.childWorksheetId === childWorksheetId);
       // Every contributing parent's formula cells may have no valid backend-side cache at all
       // (openpyxl has no formula engine) — Univer, already rendering each parent live, has the
-      // real answer.
-      const computedValues = (group?.sources ?? []).map((source) => ({
-        worksheet_id: source.parent_worksheet_id,
-        values: getComputedValues(source.parent_worksheet_id),
-      }));
+      // real answer. Awaited: this forces (and waits out) a full recalculation first, see
+      // getComputedValues' own comment for why that's not optional.
+      const computedValues = await Promise.all(
+        (group?.sources ?? []).map(async (source) => ({
+          worksheet_id: source.parent_worksheet_id,
+          values: await getComputedValues(source.parent_worksheet_id),
+        }))
+      );
       return syncChildSheet(workbookId, childWorksheetId, { computed_values: computedValues });
     },
     onSuccess: (_data, childWorksheetId) => {
