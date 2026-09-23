@@ -1,4 +1,4 @@
-import type { FilterConditionGroup, FilterConditionLeaf, FilterNode, FilterOperator } from "../../types/filter";
+import type { FilterConditionGroup, FilterConditionLeaf, FilterOperator } from "../../types/filter";
 import { isFilterGroup } from "../../types/filter";
 import type { WorksheetColumn } from "../../types/sheetRelationship";
 
@@ -79,20 +79,26 @@ function ConditionLeafEditor({
   );
 }
 
+// Deliberately flat: just a list of conditions, always implicitly AND'd together. The
+// underlying data shape (FilterConditionGroup, with "logic" and nested groups) still supports
+// AND/OR and nesting on the backend (filter_engine.py's evaluate()), but that was confusing for
+// a non-technical user configuring a child sheet — "just the condition part is necessary" — so
+// this editor only ever produces/edits a single flat AND group of leaf conditions. A group's
+// `logic` is left as "AND" and never surfaced as a choice; any leaf that happens to be a nested
+// group (not possible to create from this UI, but tolerated if present in existing data) is
+// simply skipped rather than rendered.
 export function FilterGroupEditor({
   group,
   columns,
   onChange,
-  onRemove,
 }: {
   group: FilterConditionGroup;
   columns: WorksheetColumn[];
   onChange: (group: FilterConditionGroup) => void;
-  onRemove?: () => void;
 }) {
-  function updateChild(index: number, node: FilterNode) {
+  function updateChild(index: number, condition: FilterConditionLeaf) {
     const conditions = [...group.conditions];
-    conditions[index] = node;
+    conditions[index] = condition;
     onChange({ ...group, conditions });
   }
 
@@ -110,29 +116,10 @@ export function FilterGroupEditor({
     });
   }
 
-  function addGroup() {
-    onChange({ ...group, conditions: [...group.conditions, { logic: "AND", conditions: [] }] });
-  }
-
   return (
     <div className="filter-group">
-      <select
-        value={group.logic}
-        onChange={(e) => onChange({ ...group, logic: e.target.value as "AND" | "OR" })}
-      >
-        <option value="AND">AND</option>
-        <option value="OR">OR</option>
-      </select>
       {group.conditions.map((node, index) =>
-        isFilterGroup(node) ? (
-          <FilterGroupEditor
-            key={index}
-            group={node}
-            columns={columns}
-            onChange={(updated) => updateChild(index, updated)}
-            onRemove={() => removeChild(index)}
-          />
-        ) : (
+        isFilterGroup(node) ? null : (
           <ConditionLeafEditor
             key={index}
             condition={node}
@@ -145,14 +132,6 @@ export function FilterGroupEditor({
       <button type="button" className="editor-action-btn small ghost" onClick={addCondition}>
         + Condition
       </button>
-      <button type="button" className="editor-action-btn small ghost" onClick={addGroup}>
-        + Group
-      </button>
-      {onRemove && (
-        <button type="button" className="editor-action-btn small ghost" onClick={onRemove}>
-          Remove group
-        </button>
-      )}
     </div>
   );
 }
