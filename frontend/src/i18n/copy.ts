@@ -132,6 +132,54 @@ export const copy = {
       "Les feuilles enfants suivantes deviendront statiques (elles ne se synchroniseront plus) si vous supprimez cette feuille :",
     deleteSheetCancel: "Annuler",
     deleteSheetConfirm: "Supprimer quand même",
+
+    // Generic modal actions, shared across the Convert/Child Sheet modals below
+    cancelLabel: "Annuler",
+    closeLabel: "Fermer",
+    creatingLabel: "Création en cours...",
+    createLabel: "Créer",
+    removeLabel: "Retirer",
+
+    // Convert to Word modal
+    convertModalTitle: "Convertir en Word",
+    sheetFieldLabel: "Feuille",
+    convertingStatus: "Conversion en cours...",
+    downloadFileLabel: (filename: string) => `Télécharger ${filename}`,
+    downloadedNote: "Téléchargé — reconvertissez pour obtenir une nouvelle copie.",
+    conversionFailedError: "Échec de la conversion",
+
+    // Create child sheet modal
+    createChildSheetTitle: "Créer une feuille enfant",
+    childSheetNameLabel: "Nom de la feuille enfant",
+    sheetNumberLabel: (n: number) => `Feuille ${n}`,
+    childSheetNameRequiredError: "Le nom de la feuille enfant est requis",
+    headerRowRangeError: "La ligne de fin d'en-tête doit être supérieure ou égale à la ligne de début",
+    selectAtLeastOneColumnError: "Sélectionnez au moins une colonne pour chaque feuille",
+    createChildSheetFailedError: "Échec de la création de la feuille enfant",
+
+    // Child sheet source section
+    parentSheetLabel: "Feuille parente",
+    headerStartRowLabel: "Ligne de début d'en-tête",
+    headerEndRowLabel: "Ligne de fin d'en-tête",
+    filterCriteriaLabel: "Critères de filtre",
+
+    // Column picker
+    columnsToIncludeLabel: "Colonnes à inclure",
+    colSuffixLabel: (letter: string) => `(Col. ${letter})`,
+
+    // Filter condition editor
+    columnPlaceholderLabel: "Colonne",
+    addConditionLabel: "+ Condition",
+    operatorEquals: "égal à",
+    operatorNotEquals: "différent de",
+    operatorContains: "contient",
+    operatorGreaterThan: "supérieur à",
+    operatorLessThan: "inférieur à",
+    operatorGreaterOrEqual: "supérieur ou égal à",
+    operatorLessOrEqual: "inférieur ou égal à",
+    operatorIsEmpty: "est vide",
+    operatorIsNotEmpty: "n'est pas vide",
+    operatorIn: "dans (séparé par des virgules)",
   },
   en: {
     loginHeading: "ANTIC Agent Portal",
@@ -261,5 +309,53 @@ export const copy = {
       "The following child sheets will become static (they will no longer sync) if you delete this sheet:",
     deleteSheetCancel: "Cancel",
     deleteSheetConfirm: "Delete anyway",
+
+    // Generic modal actions, shared across the Convert/Child Sheet modals below
+    cancelLabel: "Cancel",
+    closeLabel: "Close",
+    creatingLabel: "Creating...",
+    createLabel: "Create",
+    removeLabel: "Remove",
+
+    // Convert to Word modal
+    convertModalTitle: "Convert to Word",
+    sheetFieldLabel: "Sheet",
+    convertingStatus: "Converting...",
+    downloadFileLabel: (filename: string) => `Download ${filename}`,
+    downloadedNote: "Downloaded — convert again for a new copy.",
+    conversionFailedError: "Conversion failed",
+
+    // Create child sheet modal
+    createChildSheetTitle: "Create child sheet",
+    childSheetNameLabel: "Child sheet name",
+    sheetNumberLabel: (n: number) => `Sheet ${n}`,
+    childSheetNameRequiredError: "Child sheet name is required",
+    headerRowRangeError: "Header end row must be greater than or equal to header start row",
+    selectAtLeastOneColumnError: "Select at least one column for every sheet",
+    createChildSheetFailedError: "Failed to create child sheet",
+
+    // Child sheet source section
+    parentSheetLabel: "Parent sheet",
+    headerStartRowLabel: "Header start row",
+    headerEndRowLabel: "Header end row",
+    filterCriteriaLabel: "Filter criteria",
+
+    // Column picker
+    columnsToIncludeLabel: "Columns to include",
+    colSuffixLabel: (letter: string) => `(Col ${letter})`,
+
+    // Filter condition editor
+    columnPlaceholderLabel: "Column",
+    addConditionLabel: "+ Condition",
+    operatorEquals: "equals",
+    operatorNotEquals: "not equals",
+    operatorContains: "contains",
+    operatorGreaterThan: "greater than",
+    operatorLessThan: "less than",
+    operatorGreaterOrEqual: "greater or equal",
+    operatorLessOrEqual: "less or equal",
+    operatorIsEmpty: "is empty",
+    operatorIsNotEmpty: "is not empty",
+    operatorIn: "in (comma-separated)",
   },
 } satisfies Record<Lang, Record<string, string | ((...args: any[]) => string)>>;

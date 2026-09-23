@@ -1,4 +1,6 @@
 import type { WorksheetColumn } from "../../types/sheetRelationship";
+import { copy } from "../../i18n/copy";
+import { useLang } from "../../i18n/useLang";
 
 export function ColumnPicker({
   columns,
@@ -9,6 +11,9 @@ export function ColumnPicker({
   selected: number[];
   onChange: (selected: number[]) => void;
 }) {
+  const { lang } = useLang();
+  const t = copy[lang];
+
   function toggle(index: number) {
     if (selected.includes(index)) {
       onChange(selected.filter((c) => c !== index));
@@ -19,7 +24,7 @@ export function ColumnPicker({
 
   return (
     <fieldset className="column-picker">
-      <legend>Columns to include</legend>
+      <legend>{t.columnsToIncludeLabel}</legend>
       {columns.map((column) => (
         <label key={column.index} className="column-picker-item">
           <input
@@ -27,7 +32,7 @@ export function ColumnPicker({
             checked={selected.includes(column.index)}
             onChange={() => toggle(column.index)}
           />
-          {column.label} (Col {column.letter})
+          {column.label} {t.colSuffixLabel(column.letter)}
         </label>
       ))}
     </fieldset>

@@ -63,7 +63,7 @@ export function ChildSheetModal({
       onCreated(response.worksheet.id);
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? String(err.detail) : "Failed to create child sheet");
+      setError(err instanceof ApiError ? String(err.detail) : t.createChildSheetFailedError);
     },
   });
 
@@ -82,16 +82,16 @@ export function ChildSheetModal({
   function handleSubmit() {
     setError(null);
     if (!childSheetName.trim()) {
-      setError("Child sheet name is required");
+      setError(t.childSheetNameRequiredError);
       return;
     }
     for (const source of sources) {
       if (source.headerEndRow < source.headerStartRow) {
-        setError("Header end row must be greater than or equal to header start row");
+        setError(t.headerRowRangeError);
         return;
       }
       if (source.selectedColumns.length === 0) {
-        setError("Select at least one column for every sheet");
+        setError(t.selectAtLeastOneColumnError);
         return;
       }
     }
@@ -107,13 +107,13 @@ export function ChildSheetModal({
     <div className="modal-overlay" onClick={onClose}>
       <div
         role="dialog"
-        aria-label="Create child sheet"
+        aria-label={t.createChildSheetTitle}
         className="modal-card"
         onClick={(event) => event.stopPropagation()}
       >
-        <h2 className="modal-title">Create child sheet</h2>
+        <h2 className="modal-title">{t.createChildSheetTitle}</h2>
         <label className="editor-panel-field">
-          Child sheet name
+          {t.childSheetNameLabel}
           <input type="text" value={childSheetName} onChange={(e) => setChildSheetName(e.target.value)} />
         </label>
 
@@ -126,7 +126,7 @@ export function ChildSheetModal({
             onChange={(next) => updateSource(index, next)}
             onRemove={() => removeSource(index)}
             showRemove={sources.length > 1}
-            sourceLabel={`Sheet ${index + 1}`}
+            sourceLabel={t.sheetNumberLabel(index + 1)}
           />
         ))}
 
@@ -143,10 +143,10 @@ export function ChildSheetModal({
         <div className="modal-actions">
           <button type="button" className="editor-action-btn" onClick={handleSubmit} disabled={mutation.isPending}>
             {mutation.isPending && <SpinnerIcon className="btn-spinner" />}
-            {mutation.isPending ? "Creating..." : "Create"}
+            {mutation.isPending ? t.creatingLabel : t.createLabel}
           </button>
           <button type="button" className="editor-action-btn ghost" onClick={onClose}>
-            Cancel
+            {t.cancelLabel}
           </button>
         </div>
       </div>

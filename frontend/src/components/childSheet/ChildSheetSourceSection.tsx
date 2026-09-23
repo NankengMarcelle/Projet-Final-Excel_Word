@@ -86,7 +86,7 @@ export function ChildSheetSourceSection({
       </div>
 
       <label className="editor-panel-field">
-        Parent sheet
+        {t.parentSheetLabel}
         <select
           value={value.parentWorksheetId}
           onChange={(e) => updateAndResetSelection({ parentWorksheetId: e.target.value })}
@@ -100,7 +100,7 @@ export function ChildSheetSourceSection({
       </label>
 
       <label className="editor-panel-field">
-        Header start row
+        {t.headerStartRowLabel}
         <input
           type="number"
           min={1}
@@ -109,7 +109,7 @@ export function ChildSheetSourceSection({
         />
       </label>
       <label className="editor-panel-field">
-        Header end row
+        {t.headerEndRowLabel}
         <input
           type="number"
           min={1}
@@ -124,7 +124,7 @@ export function ChildSheetSourceSection({
         onChange={(selectedColumns) => onChange({ ...value, selectedColumns })}
       />
 
-      <h4 className="modal-subtitle">Filter criteria</h4>
+      <h4 className="modal-subtitle">{t.filterCriteriaLabel}</h4>
       <FilterGroupEditor
         group={value.filterGroup}
         columns={columns}

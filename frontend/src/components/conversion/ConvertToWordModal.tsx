@@ -6,6 +6,8 @@ import { useFileDownload } from "../../hooks/useFileDownload";
 import { SpinnerIcon, WordDocIcon } from "../icons/EditorIcons";
 import type { WorksheetRead } from "../../types/worksheet";
 import type { ComputedCellValue } from "../../univer/UniverSheetGrid";
+import { copy } from "../../i18n/copy";
+import { useLang } from "../../i18n/useLang";
 
 type Phase = "idle" | "ready" | "downloaded";
 
@@ -21,6 +23,8 @@ export function ConvertToWordModal({
   onClose: () => void;
   getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
 }) {
+  const { lang } = useLang();
+  const t = copy[lang];
   const [selectedWorksheetId, setSelectedWorksheetId] = useState(worksheets[0]?.id ?? "");
   const [phase, setPhase] = useState<Phase>("idle");
   const [conversionId, setConversionId] = useState<string | null>(null);
@@ -65,11 +69,11 @@ export function ConvertToWordModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div role="dialog" aria-label="Convert to Word" className="modal-card" onClick={(event) => event.stopPropagation()}>
-        <h2 className="modal-title">Convert to Word</h2>
+      <div role="dialog" aria-label={t.convertModalTitle} className="modal-card" onClick={(event) => event.stopPropagation()}>
+        <h2 className="modal-title">{t.convertModalTitle}</h2>
 
         <label className="editor-panel-field">
-          Sheet
+          {t.sheetFieldLabel}
           <select value={selectedWorksheetId} onChange={(e) => handleWorksheetChange(e.target.value)}>
             {worksheets.map((w) => (
               <option key={w.id} value={w.id}>
@@ -83,10 +87,10 @@ export function ConvertToWordModal({
           <div className="modal-actions">
             <button type="button" className="editor-action-btn" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
               {mutation.isPending ? <SpinnerIcon className="btn-spinner" /> : <WordDocIcon />}{" "}
-              {mutation.isPending ? "Converting..." : "Convert"}
+              {mutation.isPending ? t.convertingStatus : t.convertLabel}
             </button>
             <button type="button" className="editor-action-btn ghost" onClick={onClose}>
-              Cancel
+              {t.cancelLabel}
             </button>
           </div>
         )}
@@ -95,20 +99,20 @@ export function ConvertToWordModal({
           <div className="modal-actions">
             <button type="button" className="editor-action-btn" onClick={handleDownload} disabled={isDownloading}>
               {isDownloading && <SpinnerIcon className="btn-spinner" />}
-              {isDownloading ? "Downloading..." : `Download ${filename}`}
+              {isDownloading ? t.downloading : t.downloadFileLabel(filename)}
             </button>
             <button type="button" className="editor-action-btn ghost" onClick={onClose}>
-              Close
+              {t.closeLabel}
             </button>
           </div>
         )}
 
         {phase === "downloaded" && (
           <>
-            <p className="editor-panel-note">Downloaded — convert again for a new copy.</p>
+            <p className="editor-panel-note">{t.downloadedNote}</p>
             <div className="modal-actions">
               <button type="button" className="editor-action-btn ghost" onClick={onClose}>
-                Close
+                {t.closeLabel}
               </button>
             </div>
           </>
@@ -116,7 +120,7 @@ export function ConvertToWordModal({
 
         {mutation.isError && (
           <p role="alert" className="editor-panel-error">
-            {mutation.error instanceof ApiError ? String(mutation.error.detail) : "Conversion failed"}
+            {mutation.error instanceof ApiError ? String(mutation.error.detail) : t.conversionFailedError}
           </p>
         )}
         {downloadError && (

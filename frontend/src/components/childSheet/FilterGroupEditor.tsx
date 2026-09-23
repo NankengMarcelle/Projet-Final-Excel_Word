@@ -1,19 +1,26 @@
 import type { FilterConditionGroup, FilterConditionLeaf, FilterOperator } from "../../types/filter";
 import { isFilterGroup } from "../../types/filter";
 import type { WorksheetColumn } from "../../types/sheetRelationship";
+import { copy } from "../../i18n/copy";
+import { useLang } from "../../i18n/useLang";
 
-const OPERATORS: { value: FilterOperator; label: string }[] = [
-  { value: "equals", label: "equals" },
-  { value: "not_equals", label: "not equals" },
-  { value: "contains", label: "contains" },
-  { value: "greater_than", label: "greater than" },
-  { value: "less_than", label: "less than" },
-  { value: "greater_or_equal", label: "greater or equal" },
-  { value: "less_or_equal", label: "less or equal" },
-  { value: "is_empty", label: "is empty" },
-  { value: "is_not_empty", label: "is not empty" },
-  { value: "in", label: "in (comma-separated)" },
-];
+// Keyed by the same copy object used everywhere else — built inside a function (not a
+// module-level constant) so it re-reads the active language on every render, the same way
+// every other component in this file's family already resolves `t = copy[lang]`.
+function operators(t: (typeof copy)["fr"] | (typeof copy)["en"]): { value: FilterOperator; label: string }[] {
+  return [
+    { value: "equals", label: t.operatorEquals },
+    { value: "not_equals", label: t.operatorNotEquals },
+    { value: "contains", label: t.operatorContains },
+    { value: "greater_than", label: t.operatorGreaterThan },
+    { value: "less_than", label: t.operatorLessThan },
+    { value: "greater_or_equal", label: t.operatorGreaterOrEqual },
+    { value: "less_or_equal", label: t.operatorLessOrEqual },
+    { value: "is_empty", label: t.operatorIsEmpty },
+    { value: "is_not_empty", label: t.operatorIsNotEmpty },
+    { value: "in", label: t.operatorIn },
+  ];
+}
 
 function needsValue(operator: FilterOperator): boolean {
   return operator !== "is_empty" && operator !== "is_not_empty";
@@ -36,6 +43,8 @@ function ConditionLeafEditor({
   onChange: (condition: FilterConditionLeaf) => void;
   onRemove: () => void;
 }) {
+  const { lang } = useLang();
+  const t = copy[lang];
   return (
     <div className="filter-condition-row">
       <select
@@ -43,11 +52,11 @@ function ConditionLeafEditor({
         onChange={(e) => onChange({ ...condition, column: Number(e.target.value) })}
       >
         <option value="" disabled>
-          Column
+          {t.columnPlaceholderLabel}
         </option>
         {columns.map((column) => (
           <option key={column.index} value={column.index}>
-            {column.label} (Col {column.letter})
+            {column.label} {t.colSuffixLabel(column.letter)}
           </option>
         ))}
       </select>
@@ -55,7 +64,7 @@ function ConditionLeafEditor({
         value={condition.operator}
         onChange={(e) => onChange({ ...condition, operator: e.target.value as FilterOperator })}
       >
-        {OPERATORS.map((op) => (
+        {operators(t).map((op) => (
           <option key={op.value} value={op.value}>
             {op.label}
           </option>
@@ -73,7 +82,7 @@ function ConditionLeafEditor({
         />
       )}
       <button type="button" className="editor-action-btn small ghost" onClick={onRemove}>
-        Remove
+        {t.removeLabel}
       </button>
     </div>
   );
@@ -96,6 +105,9 @@ export function FilterGroupEditor({
   columns: WorksheetColumn[];
   onChange: (group: FilterConditionGroup) => void;
 }) {
+  const { lang } = useLang();
+  const t = copy[lang];
+
   function updateChild(index: number, condition: FilterConditionLeaf) {
     const conditions = [...group.conditions];
     conditions[index] = condition;
@@ -130,7 +142,7 @@ export function FilterGroupEditor({
         )
       )}
       <button type="button" className="editor-action-btn small ghost" onClick={addCondition}>
-        + Condition
+        {t.addConditionLabel}
       </button>
     </div>
   );
