@@ -1,6 +1,6 @@
 from openpyxl import Workbook
 
-from app.spreadsheet.filter_engine import apply_filter, project_columns, read_rows, write_rows
+from app.spreadsheet.filter_engine import apply_filter, evaluate, project_columns, read_rows, write_rows
 
 
 def _build_multi_row_header_sheet():
@@ -78,6 +78,40 @@ def test_write_rows_preserves_the_full_multi_row_header_block(tmp_path):
     assert rows[1] == ("Action", "CP voté")
     assert rows[2] == ("Task one", 20)
     assert rows[3] == ("Task two", 40)
+
+
+def test_numeric_operators_parse_formatted_number_strings_from_live_formula_overrides():
+    # A formula cell's "computed value", when it comes from Univer's live formula engine rather
+    # than openpyxl's own cache (see ComputedCellValue/apply_value_overrides), can be a
+    # *formatted display string* — confirmed live against a real workbook: " 300,000,000   "
+    # (thousand separators + padding from the cell's own number format) and "-" (a French
+    # accounting-format placeholder for zero), not 300000000 and 0. A numeric filter has to see
+    # through that formatting or it silently matches almost nothing.
+    condition = {"column": 1, "operator": "greater_than", "value": "0"}
+    assert evaluate(condition, {1: " 300,000,000   "}) is True
+    assert evaluate(condition, {1: " -   "}) is False
+    # A genuinely non-numeric placeholder ("DNC") sitting in an otherwise-numeric column can't
+    # satisfy a numeric filter either way — this must fail cleanly, not crash (a bare `>`
+    # between str and float raises TypeError) and not silently pass via raw string ordering
+    # ("DNC" > "0" is True as plain text, which means nothing numerically).
+    assert evaluate(condition, {1: "DNC"}) is False
+    assert evaluate({"column": 1, "operator": "equals", "value": "0"}, {1: "DNC"}) is False
+    assert evaluate({"column": 1, "operator": "not_equals", "value": "0"}, {1: "DNC"}) is True
+    # equals/not_equals also see through the same formatting.
+    assert evaluate({"column": 1, "operator": "equals", "value": "300000000"}, {1: " 300,000,000   "}) is True
+
+
+def test_text_filtering_needs_no_quoting_and_alphabetical_ordering_still_works():
+    # The filter UI's value field is a plain text input — whatever the user types is compared
+    # as-is, never quoted/unquoted. Equality on genuine text (a status column) must keep working
+    # unchanged now that numeric coercion exists alongside it.
+    assert evaluate({"column": 1, "operator": "equals", "value": "Active"}, {1: "Active"}) is True
+    assert evaluate({"column": 1, "operator": "equals", "value": "Active"}, {1: "Inactive"}) is False
+    # Alphabetical ordering on genuine text (the filter's own typed value isn't numeric-looking,
+    # e.g. "M") must still work — this is what a naive "always require both sides numeric or
+    # bail out" fix would have silently removed.
+    assert evaluate({"column": 1, "operator": "greater_than", "value": "M"}, {1: "Zebra"}) is True
+    assert evaluate({"column": 1, "operator": "greater_than", "value": "M"}, {1: "Apple"}) is False
 
 
 def test_read_rows_resolves_vertically_merged_data_cells_for_kept_rows():

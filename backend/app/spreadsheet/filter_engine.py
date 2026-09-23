@@ -12,8 +12,8 @@ def safe_unmerge(ws: OpenpyxlWorksheet, coord: str) -> None:
     self._cells[(row, col)]` for every non-anchor cell in the merge — but a merge read from a
     real Excel-authored file can cover a cell that never had an XML <c> entry at all (a
     genuinely empty cell inside the merge), which throws a bare KeyError. Confirmed live
-    against real workbook data; see worksheet_service.apply_structural_edit's own comment for
-    the original discovery."""
+    against real workbook data — see test_worksheet_structural_edits.py's own regression test
+    for the original discovery."""
     cell_range = CellRange(coord)
     if cell_range.coord in ws.merged_cells:
         ws.merged_cells.remove(cell_range)
@@ -249,11 +249,84 @@ def compute_projected_merges(
     return projected
 
 
+def _to_number(value: object) -> float | None:
+    """Best-effort parse of a value into a float, for comparing across whatever mix of types a
+    filter condition's two sides can actually show up as. Two distinct sources of type mismatch
+    here, confirmed live against a real workbook, not just theoretical:
+
+    1. The filter UI's value field is a plain text input (FilterConditionLeaf in the frontend's
+       filter.ts) — it always arrives here as a string, even when comparing against a numeric
+       cell.
+    2. A cell's "computed value", when it comes from Univer's live formula engine rather than
+       openpyxl's own cache (see ComputedCellValue/apply_value_overrides — openpyxl has no
+       formula engine of its own), can be a *formatted display string* rather than a raw
+       number: a real column in this app's own test data came through as `" 300,000,000   "`
+       (thousand separators and padding from the cell's own number format) and `"-"` (a French
+       accounting-format placeholder for zero), not `300000000` and `0`.
+
+    Comparing across these mismatches either raises (Python has no ordering between int and
+    str: `100 > "100"` is a TypeError, and so is `" 300,000,000   " > 0`) or is silently
+    always-False/always-True in ways that don't reflect the actual numbers at all (plain string
+    comparison treats `"-" > "0"` as False and `"DNC" > "0"` as True, neither of which means
+    anything numerically). Returns None — not the original value — when something genuinely
+    isn't a number, so the caller can tell "parsed as zero" apart from "couldn't parse".
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "").replace("\xa0", "")
+        if cleaned in ("", "-"):
+            return 0.0
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
 def _evaluate_condition(condition: dict, row: dict[int, object]) -> bool:
     column = condition["column"]
     operator = condition["operator"]
     value = condition.get("value")
     cell_value = row.get(column)
+
+    # Numeric operators: whether to compare numerically is decided by the FILTER'S OWN typed
+    # value, not just "did both sides happen to parse" — that value is the one place the user's
+    # actual intent lives (no quoting needed either way, the filter value field is always plain
+    # text; see FilterConditionLeaf in the frontend's filter.ts). If the user typed a number
+    # ("0", "300000000"), they mean a numeric comparison, full stop: a cell that can't be read
+    # as a number for it (a text placeholder like "DNC" sitting in an otherwise-numeric column)
+    # doesn't match an ordering comparison — there's no sensible answer — rather than silently
+    # falling back to Python's raw string ordering, which is what let "DNC" compare as
+    # (meaninglessly) "greater than" "0" here before. If the user instead typed something
+    # non-numeric ("Active", "M"), that's a genuine text/alphabetical filter, unchanged from
+    # before any numeric handling existed here — a real int/float cell value only reaches that
+    # path already stringified by the equality/ordering operators themselves. Guarded by
+    # TypeError for a genuinely incomparable pair either way, so it cleanly doesn't match rather
+    # than crashing the request.
+    if operator in ("equals", "not_equals", "greater_than", "less_than", "greater_or_equal", "less_or_equal"):
+        value_num = _to_number(value)
+        if value_num is not None:
+            cell_num = _to_number(cell_value)
+            if operator in ("equals", "not_equals"):
+                if cell_num is not None:
+                    cell_value, value = cell_num, value_num
+                # else: a non-numeric cell trivially equals/not_equals a numeric target via the
+                # plain == / != below — no coercion needed to get that right.
+            elif cell_num is None:
+                return False
+            else:
+                cell_value, value = cell_num, value_num
+    elif operator == "in" and isinstance(value, list):
+        cell_num = _to_number(cell_value)
+        value = [
+            (_to_number(item) if cell_num is not None and _to_number(item) is not None else item)
+            for item in value
+        ]
+        if cell_num is not None:
+            cell_value = cell_num
 
     if operator == "equals":
         return cell_value == value
@@ -261,14 +334,19 @@ def _evaluate_condition(condition: dict, row: dict[int, object]) -> bool:
         return cell_value != value
     if operator == "contains":
         return cell_value is not None and value is not None and str(value) in str(cell_value)
-    if operator == "greater_than":
-        return cell_value is not None and cell_value > value
-    if operator == "less_than":
-        return cell_value is not None and cell_value < value
-    if operator == "greater_or_equal":
-        return cell_value is not None and cell_value >= value
-    if operator == "less_or_equal":
-        return cell_value is not None and cell_value <= value
+    if operator in ("greater_than", "less_than", "greater_or_equal", "less_or_equal"):
+        if cell_value is None:
+            return False
+        try:
+            if operator == "greater_than":
+                return cell_value > value
+            if operator == "less_than":
+                return cell_value < value
+            if operator == "greater_or_equal":
+                return cell_value >= value
+            return cell_value <= value
+        except TypeError:
+            return False
     if operator == "is_empty":
         return cell_value is None or cell_value == ""
     if operator == "is_not_empty":
