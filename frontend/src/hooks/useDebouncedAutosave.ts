@@ -57,6 +57,34 @@ export function useDebouncedAutosave(
     setStatus(savingIdsRef.current.size > 0 ? "saving" : "saved");
   }, []);
 
+  // Lets a save that isn't a per-cell autosave (a structural edit, or a whole sheet being
+  // created/deleted) still drive the same aggregate "Saving…/Saved/error" indicator as the
+  // ordinary cell-edit autosave below, via the same savingIdsRef this hook already tracks —
+  // so the indicator reflects *any* change Univer sends toward the backend, not just plain
+  // cell edits. `key` just needs to be unique per in-flight save; callers use the affected
+  // worksheet's id, which is never itself a pending cell-edit save id at the same time (a
+  // structural edit's own beginStructuralEdit below already clears/blocks that sheet's
+  // pending cell diff for the duration).
+  const beginExternalSave = useCallback(
+    (key: string) => {
+      savingIdsRef.current.add(key);
+      updateAggregateStatus();
+    },
+    [updateAggregateStatus]
+  );
+
+  const resolveExternalSave = useCallback(
+    (key: string, failed = false) => {
+      savingIdsRef.current.delete(key);
+      if (failed) {
+        setStatus("error");
+      } else {
+        updateAggregateStatus();
+      }
+    },
+    [updateAggregateStatus]
+  );
+
   // Returns whether this sheet ended up in a clean state (nothing pending, or successfully
   // saved) — false only on an actual save failure. flushAll() uses this to know whether it's
   // safe to declare "saved" once every sheet it kicked off has settled, without stomping on an
@@ -191,10 +219,14 @@ export function useDebouncedAutosave(
   // typed in the same sub-second window as a structural action is discarded too, rather than
   // risk resurrecting the crash. Also marks the sheet structural-in-flight so handleChange
   // ignores any further SheetValueChanged firing for this same action (see its own comment).
-  const beginStructuralEdit = useCallback((worksheetId: string) => {
-    structuralInFlightRef.current.add(worksheetId);
-    delete pendingRef.current[worksheetId];
-  }, []);
+  const beginStructuralEdit = useCallback(
+    (worksheetId: string) => {
+      structuralInFlightRef.current.add(worksheetId);
+      delete pendingRef.current[worksheetId];
+      beginExternalSave(worksheetId);
+    },
+    [beginExternalSave]
+  );
 
   // Called once the structural edit's own backend request has resolved (success or failure).
   // On success, `freshSnapshot` — a post-shift extractCellValues() of the sheet's current live
@@ -202,15 +234,28 @@ export function useDebouncedAutosave(
   // structural endpoint already applied the equivalent change to the real file. A concurrent
   // plain edit made during the request's own round trip would be folded into this baseline as
   // if already saved rather than queued — a known, accepted gap for that narrow window, not
-  // solved here. On failure, just stop ignoring the sheet; the next genuine edit (or a manual
-  // Save) resumes normal value-diff autosave against the old, now-stale baseline.
-  const resolveStructuralEdit = useCallback((worksheetId: string, freshSnapshot?: CellSnapshotMap) => {
-    if (freshSnapshot) {
-      lastSavedRef.current[worksheetId] = freshSnapshot;
-      delete pendingRef.current[worksheetId];
-    }
-    structuralInFlightRef.current.delete(worksheetId);
-  }, []);
+  // solved here. On failure (`failed: true`), just stop ignoring the sheet and surface the
+  // error status; the next genuine edit (or a manual Save) resumes normal value-diff autosave
+  // against the old, now-stale baseline.
+  const resolveStructuralEdit = useCallback(
+    (worksheetId: string, freshSnapshot?: CellSnapshotMap, failed = false) => {
+      if (freshSnapshot) {
+        lastSavedRef.current[worksheetId] = freshSnapshot;
+        delete pendingRef.current[worksheetId];
+      }
+      structuralInFlightRef.current.delete(worksheetId);
+      resolveExternalSave(worksheetId, failed);
+    },
+    [resolveExternalSave]
+  );
 
-  return { status, handleChange, flushAll, beginStructuralEdit, resolveStructuralEdit };
+  return {
+    status,
+    handleChange,
+    flushAll,
+    beginStructuralEdit,
+    resolveStructuralEdit,
+    beginExternalSave,
+    resolveExternalSave,
+  };
 }

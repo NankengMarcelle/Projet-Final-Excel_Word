@@ -96,6 +96,7 @@ const STRUCTURAL_COMMAND_IDS: Record<string, StructuralEditOperation> = {
 };
 
 const REMOVE_SHEET_COMMAND_ID = "sheet.mutation.remove-sheet";
+const INSERT_SHEET_COMMAND_ID = "sheet.mutation.insert-sheet";
 
 // Every mutation id that changes sheet-level metadata (merges/freeze/column-row sizing/
 // conditional formatting/data validation/autofilter) but doesn't necessarily fire
@@ -109,6 +110,7 @@ const REMOVE_SHEET_COMMAND_ID = "sheet.mutation.remove-sheet";
 // *anything* else triggers a flush for it (a later edit, manual Save, Ctrl+S, unload) — this is
 // a promptness optimization, not the thing correctness depends on.
 const METADATA_COMMAND_IDS = new Set([
+  "sheet.mutation.set-worksheet-name",
   "sheet.mutation.add-worksheet-merge",
   "sheet.mutation.remove-worksheet-merge",
   "sheet.mutation.set-frozen",
@@ -172,6 +174,11 @@ interface UniverSheetGridProps {
   // handle below (after the caller's own warning was confirmed). This is the single place
   // that should tell the backend "this worksheet is gone," uniformly for both paths.
   onSheetDeleted?: (worksheetId: string) => void;
+  // Fired after Univer's own native "+" insert has already happened, live, in the browser —
+  // symmetric with onSheetDeleted above. worksheetId is Univer's own generated id for the new
+  // sheet (see worksheets.id's own comment on why that's fine to persist directly), not one
+  // this app assigns.
+  onSheetInserted?: (worksheetId: string, name: string) => void;
 }
 
 export interface ComputedCellValue {
@@ -226,7 +233,15 @@ export interface UniverSheetGridHandle {
 }
 
 export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGridProps>(function UniverSheetGrid(
-  { workbookData, onChange, onActiveSheetChange, onStructuralEdit, onBeforeSheetDelete, onSheetDeleted },
+  {
+    workbookData,
+    onChange,
+    onActiveSheetChange,
+    onStructuralEdit,
+    onBeforeSheetDelete,
+    onSheetDeleted,
+    onSheetInserted,
+  },
   ref
 ) {
   const { lang } = useLang();
@@ -267,6 +282,8 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
   onBeforeSheetDeleteRef.current = onBeforeSheetDelete;
   const onSheetDeletedRef = useRef(onSheetDeleted);
   onSheetDeletedRef.current = onSheetDeleted;
+  const onSheetInsertedRef = useRef(onSheetInserted);
+  onSheetInsertedRef.current = onSheetInserted;
   // Worksheet ids whose deletion has already been through onBeforeSheetDelete once and been
   // explicitly approved (see confirmDeleteSheet below) — checked so the *second*, re-issued
   // delete attempt isn't intercepted all over again into an infinite warn-cancel loop.
@@ -389,6 +406,7 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
         }
 
         return buildWorksheetMetadataUpdate({
+          name: snapshot.name,
           freeze,
           mergeData: (snapshot.mergeData ?? []) as StructuralCommandRange[],
           columnData: (snapshot.columnData ?? {}) as Record<number, { w?: number; hd?: number }>,
@@ -547,6 +565,17 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
         return;
       }
 
+      if (commandInfo.id === INSERT_SHEET_COMMAND_ID) {
+        // Fires once Univer's own native "+" insert has already happened — its own model owns
+        // this the same way it owns delete (see REMOVE_SHEET_COMMAND_ID's own handling right
+        // above): the sheet already exists, live, before this app hears about it at all. Just
+        // hands the id/name up so it can be persisted in the background; nothing here can or
+        // should block Univer's own UI.
+        const params = commandInfo.params as { sheet?: { id: string; name: string } } | undefined;
+        if (params?.sheet) onSheetInsertedRef.current?.(params.sheet.id, params.sheet.name);
+        return;
+      }
+
       if (METADATA_COMMAND_IDS.has(commandInfo.id)) {
         // Purely to kick the existing autosave debounce timer for this one sheet — a metadata
         // change (e.g. merging two cells) doesn't necessarily touch any cell value, so
@@ -610,6 +639,7 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
         event.cancel = true;
       }
     });
+
 
     return () => {
       const workbook = univerAPI.getActiveWorkbook();

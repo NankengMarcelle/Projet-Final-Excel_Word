@@ -21,6 +21,10 @@ function makeCell(overrides: Partial<WorksheetData["cells"][number]>): Worksheet
     italic: false,
     font_color: null,
     fill_color: null,
+    font_family: null,
+    font_size: null,
+    underline: false,
+    strikethrough: false,
     horizontal_alignment: null,
     vertical_alignment: null,
     borders: { top: null, bottom: null, left: null, right: null },
@@ -166,6 +170,7 @@ describe("backendToUniverWorksheetData", () => {
 describe("buildWorksheetMetadataUpdate", () => {
   function makeRaw(overrides: Partial<RawWorksheetMetadata>): RawWorksheetMetadata {
     return {
+      name: "Sheet1",
       freeze: null,
       mergeData: [],
       columnData: {},
@@ -232,6 +237,10 @@ const BLANK_STYLE = {
   italic: false,
   font_color: null,
   fill_color: null,
+  font_family: null,
+  font_size: null,
+  underline: false,
+  strikethrough: false,
   horizontal_alignment: null,
   vertical_alignment: null,
   borders: { top: null, bottom: null, left: null, right: null },
@@ -313,6 +322,10 @@ describe("extractCellValues / diffCellValues", () => {
               it: 1,
               cl: { rgb: "#FF0000" },
               bg: { rgb: "#00FF00" },
+              ff: "Times New Roman",
+              fs: 14,
+              ul: { s: 1 },
+              st: { s: 1 },
               ht: 2, // center
               vt: 1, // top
               bd: { t: { s: 1, cl: { rgb: "#000000" } }, r: { s: 13, cl: { rgb: "#000000" } } },
@@ -332,6 +345,10 @@ describe("extractCellValues / diffCellValues", () => {
         italic: true,
         font_color: "FFFF0000",
         fill_color: "FF00FF00",
+        font_family: "Times New Roman",
+        font_size: 14,
+        underline: true,
+        strikethrough: true,
         horizontal_alignment: "center",
         vertical_alignment: "top",
         borders: { top: "thin", bottom: null, left: null, right: "thick" },

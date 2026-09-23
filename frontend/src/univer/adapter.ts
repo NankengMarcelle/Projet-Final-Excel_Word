@@ -184,6 +184,13 @@ function buildCellValue(cell: CellData): ICellData {
   if (cell.fill_color) {
     value.s = { ...(typeof value.s === "object" ? value.s : {}), bg: { rgb: normalizeColor(cell.fill_color) } };
   }
+  if (cell.font_family) value.s = { ...(typeof value.s === "object" ? value.s : {}), ff: cell.font_family };
+  if (cell.font_size != null) value.s = { ...(typeof value.s === "object" ? value.s : {}), fs: cell.font_size };
+  // Univer's own model represents underline/strikethrough as a decoration object ({s: 0|1,
+  // ...}), not a plain boolean — see IStyleData.ul/st. `s: 1` is "shown"; this app never sets
+  // a custom color/line-type on either, so the rest of ITextDecoration is left unset.
+  if (cell.underline) value.s = { ...(typeof value.s === "object" ? value.s : {}), ul: { s: 1 } };
+  if (cell.strikethrough) value.s = { ...(typeof value.s === "object" ? value.s : {}), st: { s: 1 } };
 
   const ht = cell.horizontal_alignment ? HORIZONTAL_ALIGNMENT_CODES[cell.horizontal_alignment] : undefined;
   if (ht) value.s = { ...(typeof value.s === "object" ? value.s : {}), ht };
@@ -215,6 +222,12 @@ function cellHasSignal(cell: CellData): boolean {
     cell.italic ||
     cell.font_color !== null ||
     cell.fill_color !== null ||
+    // Not font_family/font_size: openpyxl reports *some* name/size on every cell, default or
+    // not (unlike font_color, which is null when unset) — including them here would make this
+    // clause unconditionally true and defeat the point of this check. underline/strikethrough
+    // are genuine false-by-default booleans, so they stay meaningful signal checks.
+    cell.underline ||
+    cell.strikethrough ||
     cell.horizontal_alignment !== null ||
     cell.vertical_alignment !== null ||
     (cell.number_format !== "General" && cell.number_format !== "") ||
@@ -397,6 +410,10 @@ export interface CellSnapshot {
   italic: boolean;
   fontColor: string | null;
   fillColor: string | null;
+  fontFamily: string | null;
+  fontSize: number | null;
+  underline: boolean;
+  strikethrough: boolean;
   horizontalAlignment: string | null;
   verticalAlignment: string | null;
   borders: { top: string | null; bottom: string | null; left: string | null; right: string | null };
@@ -409,6 +426,10 @@ const EMPTY_SNAPSHOT: CellSnapshot = {
   italic: false,
   fontColor: null,
   fillColor: null,
+  fontFamily: null,
+  fontSize: null,
+  underline: false,
+  strikethrough: false,
   horizontalAlignment: null,
   verticalAlignment: null,
   borders: { top: null, bottom: null, left: null, right: null },
@@ -454,6 +475,10 @@ function snapshotCell(cell: ICellData | null | undefined, styles: StylePool | un
     italic: s?.it === 1,
     fontColor: denormalizeColor(s?.cl?.rgb),
     fillColor: denormalizeColor(s?.bg?.rgb),
+    fontFamily: s?.ff ?? null,
+    fontSize: s?.fs ?? null,
+    underline: s?.ul?.s === 1,
+    strikethrough: s?.st?.s === 1,
     horizontalAlignment: s?.ht != null ? (HORIZONTAL_ALIGNMENT_NAMES[s.ht] ?? null) : null,
     verticalAlignment: s?.vt != null ? (VERTICAL_ALIGNMENT_NAMES[s.vt] ?? null) : null,
     borders: {
@@ -502,6 +527,10 @@ export function diffCellValues(previous: CellSnapshotMap, current: CellSnapshotM
       italic: curr.italic,
       font_color: curr.fontColor,
       fill_color: curr.fillColor,
+      font_family: curr.fontFamily,
+      font_size: curr.fontSize,
+      underline: curr.underline,
+      strikethrough: curr.strikethrough,
       horizontal_alignment: curr.horizontalAlignment,
       vertical_alignment: curr.verticalAlignment,
       borders: curr.borders,
@@ -548,6 +577,7 @@ export interface RawAutofilter {
 }
 
 export interface RawWorksheetMetadata {
+  name: string;
   freeze: { startRow: number; startColumn: number } | null;
   mergeData: IRange[];
   columnData: Record<number, { w?: number; hd?: number }>;
@@ -604,6 +634,7 @@ export function buildWorksheetMetadataUpdate(raw: RawWorksheetMetadata): Workshe
     : null;
 
   return {
+    name: raw.name,
     merges,
     freeze,
     column_widths,

@@ -4,13 +4,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LocaleType, type IWorkbookData, type IWorksheetData } from "@univerjs/presets";
 import { getWorkbook } from "../api/workbooks";
 import { listChildSheets } from "../api/childSheets";
+import { createWorksheet, deleteWorksheet, getWorksheet, updateWorksheet } from "../api/worksheets";
 import {
-  applyWorksheetStructuralEdit,
-  deleteWorksheet,
-  getWorksheet,
-  updateWorksheet,
-} from "../api/worksheets";
-import { backendToUniverWorksheetData, buildWorkbookResources, extractCellValues } from "../univer/adapter";
+  backendToUniverWorksheetData,
+  buildWorkbookResources,
+  diffCellValues,
+  extractCellValues,
+} from "../univer/adapter";
 import {
   UniverSheetGrid,
   type ComputedCellValue,
@@ -65,7 +65,15 @@ function EditorWorkbookReady({
   // the ref itself is stable across renders either way, only the *declaration order* matters
   // here since getMetadata is created once, on this render, and needs gridRef already in scope.
   const gridRef = useRef<UniverSheetGridHandle>(null);
-  const { status, handleChange, flushAll, beginStructuralEdit, resolveStructuralEdit } = useDebouncedAutosave(
+  const {
+    status,
+    handleChange,
+    flushAll,
+    beginStructuralEdit,
+    resolveStructuralEdit,
+    beginExternalSave,
+    resolveExternalSave,
+  } = useDebouncedAutosave(
     initialWorksheets,
     (worksheetId, edits, metadata) =>
       updateWorksheet(workbookId, worksheetId, { edits, metadata }).then(() => {
@@ -79,9 +87,15 @@ function EditorWorkbookReady({
 
   // Insert/delete row/column used to be reconstructed from a cell-value diff, which corrupted
   // merged cells (a shifted edit landing on a MergedCell's read-only .value) and had no way to
-  // represent the operation at all — see CLAUDE.md's "insert/delete row-column" section. Univer
-  // detects the real operation itself (UniverSheetGrid.tsx's onCommandExecuted) and this sends
-  // it to its own backend endpoint instead of folding it into the normal autosave diff.
+  // represent the operation at all — see CLAUDE.md's "insert/delete row-column" section. That
+  // was fixed by giving structural edits their own backend endpoint that replayed the real
+  // openpyxl operation. This goes a step further: Univer already performed and shifted the
+  // edit client-side (freshWorkbookSnapshot is its post-shift state), so instead of asking the
+  // backend to redo the shift itself, this sends Univer's own snapshot as a full sheet replace
+  // (full_replace: true) through the ordinary edit endpoint — one save path for every kind of
+  // edit, not two. structural_shift is sent alongside purely so child-sheet relationships
+  // rooted on this sheet get their stored positions shifted to match (see backend's
+  // _shift_relationships_for_structural_edit).
   const handleStructuralEdit = useCallback(
     async (
       worksheetId: string,
@@ -92,23 +106,22 @@ function EditorWorkbookReady({
     ) => {
       await beginStructuralEdit(worksheetId);
       try {
-        await applyWorksheetStructuralEdit(workbookId, worksheetId, {
-          operation,
-          start_index: startIndex,
-          count,
-        });
         const freshSheet = freshWorkbookSnapshot.sheets[worksheetId] as IWorksheetData | undefined;
-        resolveStructuralEdit(
-          worksheetId,
-          freshSheet ? extractCellValues(freshSheet, freshWorkbookSnapshot.styles) : undefined
-        );
+        const cellSnapshot = freshSheet ? extractCellValues(freshSheet, freshWorkbookSnapshot.styles) : {};
+        await updateWorksheet(workbookId, worksheetId, {
+          edits: diffCellValues({}, cellSnapshot),
+          metadata: gridRef.current?.getWorksheetMetadata(worksheetId) ?? undefined,
+          full_replace: true,
+          structural_shift: { operation, start_index: startIndex, count },
+        });
+        resolveStructuralEdit(worksheetId, freshSheet ? cellSnapshot : undefined);
         // A structural edit to a parent sheet can shift or drop a child sheet's own selected
         // columns/header rows (see backend's worksheet_service._shift_relationships_for_
         // structural_edit) — refresh the same query the value-edit autosave path already
         // invalidates after every successful save.
         void queryClient.invalidateQueries({ queryKey: ["child-sheets", workbookId] });
       } catch {
-        resolveStructuralEdit(worksheetId);
+        resolveStructuralEdit(worksheetId, undefined, true);
       }
     },
     [workbookId, beginStructuralEdit, resolveStructuralEdit, queryClient]
@@ -151,12 +164,39 @@ function EditorWorkbookReady({
   // (no dependents) or after this app's own warning was explicitly confirmed below.
   const handleSheetDeleted = useCallback(
     (worksheetId: string) => {
-      void deleteWorksheet(workbookId, worksheetId).then(() => {
-        void queryClient.invalidateQueries({ queryKey: ["workbooks", workbookId] });
-        void queryClient.invalidateQueries({ queryKey: ["child-sheets", workbookId] });
-      });
+      beginExternalSave(worksheetId);
+      void deleteWorksheet(workbookId, worksheetId)
+        .then(() => {
+          resolveExternalSave(worksheetId);
+          void queryClient.invalidateQueries({ queryKey: ["workbooks", workbookId] });
+          void queryClient.invalidateQueries({ queryKey: ["child-sheets", workbookId] });
+        })
+        .catch(() => resolveExternalSave(worksheetId, true));
     },
-    [workbookId, queryClient]
+    [workbookId, queryClient, beginExternalSave, resolveExternalSave]
+  );
+
+  // The single place that persists a brand-new sheet — fired by UniverSheetGrid once Univer's
+  // own native "+" insert has already happened, live, in the browser (symmetric with
+  // handleSheetDeleted above; Univer's own id is what gets persisted, see worksheets.id's own
+  // comment on why that's fine). Deliberately does NOT invalidate ["workbooks", workbookId]
+  // the way handleSheetDeleted does: Univer already has this sheet correctly, live, with the
+  // right id — invalidating here would feed the new id into the exact "genuinely new worksheet"
+  // growth path above that child-sheet creation relies on, forcing the same wasteful
+  // remount-and-refetch-everything this app used to do for every plain sheet insert (the whole
+  // reason this ended up going through the backend at all, rather than being cancelled and
+  // rebuilt with a backend-assigned id). The tradeoff: EditorTopBar's worksheet list and the
+  // delete-warning's dependent-sheet names can be briefly stale about a just-created plain
+  // sheet until something else naturally refreshes the workbook query — acceptable, and self-
+  // corrects on the next sheet deletion, child-sheet action, or page reload.
+  const handleSheetInserted = useCallback(
+    (worksheetId: string, name: string) => {
+      beginExternalSave(worksheetId);
+      void createWorksheet(workbookId, worksheetId, name)
+        .then(() => resolveExternalSave(worksheetId))
+        .catch(() => resolveExternalSave(worksheetId, true));
+    },
+    [workbookId, beginExternalSave, resolveExternalSave]
   );
 
   // Tracked via Univer's own ActiveSheetChanged event (its native tab strip owns which sheet is
@@ -203,6 +243,7 @@ function EditorWorkbookReady({
               onStructuralEdit={handleStructuralEdit}
               onBeforeSheetDelete={handleBeforeSheetDelete}
               onSheetDeleted={handleSheetDeleted}
+              onSheetInserted={handleSheetInserted}
             />
           </GridErrorBoundary>
         </div>
