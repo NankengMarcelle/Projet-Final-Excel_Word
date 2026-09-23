@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -13,12 +14,33 @@ from openpyxl import load_workbook as openpyxl_load_workbook
 from app.core.config import settings
 from app.spreadsheet import object_storage
 
+logger = logging.getLogger(__name__)
+
 # TEMPORARY diagnostic instrumentation for the live single-cell-edit latency investigation
 # (still open from Friday, now compounded by S3 round trips added by the Supabase migration).
 # Remove once the fix lands — see CLAUDE.md's "Autosave performance fix" section for the
 # original ~30s-per-edit diagnosis this is re-measuring against the live deployment.
 def _perf_log(label: str, seconds: float) -> None:
     print(f"[PERF] {label}: {seconds:.3f}s", flush=True)
+
+
+def _replace_with_retry(tmp_path: Path, path: Path, *, attempts: int = 5, delay: float = 0.2) -> None:
+    """os.replace() wrapper tolerating a transient Windows sharing violation (WinError 5,
+    "Access is denied") — confirmed live: a real save under heavy concurrent read+write load
+    on the same file crashed outright here. Unlike POSIX rename() (which never cares whether
+    the destination is open elsewhere), Windows can refuse to replace a file that something
+    else — most plausibly antivirus real-time scanning of the just-written temp file, or a
+    reader's file handle not yet released — briefly still has open. That window is
+    consistently sub-second in practice, so a short retry loop is the standard, safe
+    mitigation rather than failing the whole save outright."""
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 def workbook_storage_path(owner_id: uuid.UUID, workbook_id: uuid.UUID) -> Path:
@@ -143,7 +165,7 @@ def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     start = time.perf_counter()
     workbook.save(tmp_path)
-    os.replace(tmp_path, path)
+    _replace_with_retry(tmp_path, path)
     _perf_log("save_workbook: local openpyxl write", time.perf_counter() - start)
     start = time.perf_counter()
     upload_if_remote(path)
@@ -217,7 +239,27 @@ def save_workbook_preserving_formula_cache(
     save_workbook(workbook, path)
 
     if cached_values:
-        _reinject_formula_cache(path, cached_values)
+        try:
+            _reinject_formula_cache(path, cached_values)
+        except OSError:
+            # Best-effort only, by design (see this function's own docstring: a stale-but-
+            # present value beats every formula cell going blank, but restoring it at all is
+            # a nice-to-have on top of the structural save above, which has *already*
+            # succeeded and is durable on disk by this point). Confirmed live: this raising
+            # instead of degrading gracefully used to abort the whole apply_edits() request
+            # after the real save had already landed, which meant callers never reached their
+            # own post-save bookkeeping — worksheet_service._shift_relationships_for_
+            # structural_edit() never ran, leaving a child-sheet relationship pointing at a
+            # column that had already been deleted from the real file. Losing this specific
+            # cache restore is a real, visible degradation (those cells may show a stale/blank
+            # value until the file is next opened and recalculated) but not a reason to fail
+            # a save that otherwise fully succeeded.
+            logger.exception(
+                "Formula-cache reinjection failed after a successful save to %s — the "
+                "structural save itself is unaffected, but some formula cells may show a "
+                "stale or blank value until the file is next recalculated.",
+                path,
+            )
 
 
 def _read_cached_formula_values(
@@ -342,7 +384,7 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for info in infos:
             archive.writestr(info, contents[info.filename])
-    os.replace(tmp_path, path)
+    _replace_with_retry(tmp_path, path)
     _perf_log("_reinject_formula_cache: read+patch+rewrite zip", time.perf_counter() - start)
     # save_workbook() already uploaded once above (save_workbook_preserving_formula_cache calls
     # it before this function) — this is a second, harmless redundant upload for the case where
