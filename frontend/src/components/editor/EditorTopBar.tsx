@@ -162,7 +162,13 @@ export function EditorTopBar({
       </button>
 
       {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
-      {isConvertOpen && <ConvertToWordModal worksheets={worksheets} onClose={() => setIsConvertOpen(false)} />}
+      {isConvertOpen && (
+        <ConvertToWordModal
+          worksheets={worksheets}
+          onClose={() => setIsConvertOpen(false)}
+          getComputedValues={getComputedValues}
+        />
+      )}
     </div>
   );
 }

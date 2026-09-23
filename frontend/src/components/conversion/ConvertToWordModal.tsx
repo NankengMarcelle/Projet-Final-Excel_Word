@@ -5,13 +5,22 @@ import { ApiError } from "../../api/client";
 import { useFileDownload } from "../../hooks/useFileDownload";
 import { SpinnerIcon, WordDocIcon } from "../icons/EditorIcons";
 import type { WorksheetRead } from "../../types/worksheet";
+import type { ComputedCellValue } from "../../univer/UniverSheetGrid";
 
 type Phase = "idle" | "ready" | "downloaded";
 
 // Moved from an always-visible inline "Convert to Word: [dropdown] [Convert]" strip in the
 // toolbar into this on-demand popup — the sheet picker only needs to exist while the user is
 // actually converting something, not permanently taking up space in the title bar.
-export function ConvertToWordModal({ worksheets, onClose }: { worksheets: WorksheetRead[]; onClose: () => void }) {
+export function ConvertToWordModal({
+  worksheets,
+  onClose,
+  getComputedValues,
+}: {
+  worksheets: WorksheetRead[];
+  onClose: () => void;
+  getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
+}) {
   const [selectedWorksheetId, setSelectedWorksheetId] = useState(worksheets[0]?.id ?? "");
   const [phase, setPhase] = useState<Phase>("idle");
   const [conversionId, setConversionId] = useState<string | null>(null);
@@ -20,7 +29,14 @@ export function ConvertToWordModal({ worksheets, onClose }: { worksheets: Worksh
   const { download, isDownloading, error: downloadError } = useFileDownload();
 
   const mutation = useMutation({
-    mutationFn: () => convertWorksheet(selectedWorksheetId),
+    mutationFn: async () => {
+      // Univer's own live, client-side recalculated values for this sheet's formula cells —
+      // sent only for this one conversion (not every autosave) so a formula whose on-disk
+      // cache went stale/missing still shows a real number instead of literal formula text.
+      // See ConvertWorksheetRequest's own docstring on the backend for the full rationale.
+      const computedValues = await getComputedValues(selectedWorksheetId);
+      return convertWorksheet(selectedWorksheetId, computedValues);
+    },
     onSuccess: (response) => {
       setConversionId(response.conversion.id);
       setFilename(response.word_document.filename);

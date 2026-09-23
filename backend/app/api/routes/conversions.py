@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.repositories import worksheet_repository
-from app.schemas.conversion import ConversionCreateResponse, ConversionRead, WordFileRead
+from app.schemas.conversion import ConversionCreateResponse, ConversionRead, ConvertWorksheetRequest, WordFileRead
 from app.services import conversion_service
 from app.spreadsheet import excel_io
 
@@ -17,15 +17,19 @@ router = APIRouter(tags=["conversions"])
 
 @router.post("/worksheets/{worksheet_id}/convert", response_model=ConversionCreateResponse, status_code=201)
 def convert_worksheet(
-    worksheet_id: uuid.UUID,
+    worksheet_id: str,
+    payload: ConvertWorksheetRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     worksheet = worksheet_repository.get_by_id(db, worksheet_id)
     if worksheet is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worksheet not found")
+    computed_values = [
+        (cv.row, cv.column, cv.value) for cv in (payload.computed_values if payload else [])
+    ]
     conversion, word_document = conversion_service.convert_worksheet(
-        db, worksheet=worksheet, requested_by_id=current_user.id
+        db, worksheet=worksheet, requested_by_id=current_user.id, computed_values=computed_values
     )
     return ConversionCreateResponse(conversion=conversion, word_document=word_document)
 

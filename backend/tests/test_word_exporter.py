@@ -390,6 +390,79 @@ def test_worksheet_to_docx_falls_back_to_formula_text_when_cached_value_is_missi
     assert table.cell(1, 0).text == "=A1*2"
 
 
+def test_worksheet_to_docx_uses_computed_value_override_when_cache_is_missing(tmp_path):
+    # The frontend's own convert-time fix: Univer's live-recalculated value for a formula cell
+    # whose on-disk cache is gone, sent only for this one export (see ConvertWorksheetRequest's
+    # docstring). Should win over falling back to literal formula text.
+    wb = Workbook()
+    ws = wb.active
+    sheet_name = ws.title
+    ws["A1"] = 5
+    ws["A2"] = "=A1*2"
+    saved_path = tmp_path / "source.xlsx"
+    wb.save(saved_path)
+    wb.close()
+
+    ws_values = load_workbook(saved_path, data_only=True)[sheet_name]
+    ws_formulas = load_workbook(saved_path, data_only=False)[sheet_name]
+    assert ws_values["A2"].value is None  # confirms the premise: no cached value at all
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(
+        ws_values, output_path, ws_formulas=ws_formulas, computed_values={(2, 1): 10}
+    )
+
+    document = Document(output_path)
+    table = document.tables[0]
+    assert table.cell(0, 0).text == "5"
+    assert table.cell(1, 0).text == "10"
+
+
+def test_worksheet_to_docx_falls_back_to_formula_text_when_override_has_no_entry_for_the_cell(tmp_path):
+    # A computed_values payload only ever covers the formula cells the frontend actually found —
+    # any other cell must keep falling back to formula text exactly as before, not blank out.
+    wb = Workbook()
+    ws = wb.active
+    sheet_name = ws.title
+    ws["A1"] = 5
+    ws["A2"] = "=A1*2"
+    saved_path = tmp_path / "source.xlsx"
+    wb.save(saved_path)
+    wb.close()
+
+    ws_values = load_workbook(saved_path, data_only=True)[sheet_name]
+    ws_formulas = load_workbook(saved_path, data_only=False)[sheet_name]
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(
+        ws_values, output_path, ws_formulas=ws_formulas, computed_values={(99, 99): 123}
+    )
+
+    document = Document(output_path)
+    table = document.tables[0]
+    assert table.cell(1, 0).text == "=A1*2"
+
+
+def test_worksheet_to_docx_ignores_override_when_a_genuine_cached_value_is_present(tmp_path):
+    # A cell that already has a real cached value must keep showing it — the override is only
+    # a fallback for lost cache, never allowed to shadow a value that's still correct.
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = 42
+    saved_path = tmp_path / "source.xlsx"
+    wb.save(saved_path)
+    wb.close()
+
+    ws_values = load_workbook(saved_path, data_only=True)[ws.title]
+
+    output_path = tmp_path / "out.docx"
+    worksheet_to_docx(ws_values, output_path, computed_values={(1, 1): 999})
+
+    document = Document(output_path)
+    table = document.tables[0]
+    assert table.cell(0, 0).text == "42"
+
+
 def test_worksheet_to_docx_without_a_formulas_view_still_renders_blank(tmp_path):
     # Existing behavior when the caller has no second (data_only=False) load handy — every
     # other test in this file relies on this staying exactly as it was. B2 (a plain value)

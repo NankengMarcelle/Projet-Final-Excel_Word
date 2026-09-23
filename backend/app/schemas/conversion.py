@@ -3,12 +3,27 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.sheet_relationship import ComputedCellValue
+
+
+class ConvertWorksheetRequest(BaseModel):
+    """Optional: this sheet's own formula cells' *live, client-side recalculated* values, as
+    Univer's own formula engine currently sees them (see ComputedCellValue's own docstring —
+    same shape already proven for child-sheet creation/sync). openpyxl has no formula engine
+    and this app's autosave never carries a formula's computed result (only its text — see
+    adapter.ts's trackedCellValue), so a formula cell's own on-disk cached value can go stale
+    or missing over the course of ordinary editing. Sending live values here, only at convert
+    time (not on every autosave), lets the export show the real number instead of falling back
+    to literal formula text — without adding any payload to routine edits."""
+
+    computed_values: list[ComputedCellValue] = []
+
 
 class ConversionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    worksheet_id: uuid.UUID
+    worksheet_id: str
     requested_by_id: uuid.UUID
     status: str
     created_at: datetime

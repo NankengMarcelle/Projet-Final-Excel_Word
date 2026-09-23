@@ -14,7 +14,11 @@ from app.spreadsheet import excel_io, word_exporter
 
 
 def convert_worksheet(
-    db: Session, *, worksheet: Worksheet, requested_by_id: uuid.UUID
+    db: Session,
+    *,
+    worksheet: Worksheet,
+    requested_by_id: uuid.UUID,
+    computed_values: list[tuple[int, int, object]] = [],
 ) -> tuple[Conversion, WordDocument]:
     workbook = workbook_repository.get_by_id_for_owner(db, worksheet.workbook_id, requested_by_id)
     if workbook is None:
@@ -40,7 +44,13 @@ def convert_worksheet(
     # editor, so it's very often already warm.
     wb_formulas = excel_io.load_workbook_cached(storage_path, data_only=False)
     ws_formulas = wb_formulas[worksheet.name]
-    word_exporter.worksheet_to_docx(ws, output_path, ws_formulas=ws_formulas)
+    # Optional, frontend-supplied override for exactly the formula cells whose on-disk cached
+    # value is stale/missing (see ConvertWorksheetRequest's own docstring) — Univer's own
+    # live-recalculated values, sent only for this one conversion, not every autosave.
+    computed_value_overrides = {(row, column): value for row, column, value in computed_values}
+    word_exporter.worksheet_to_docx(
+        ws, output_path, ws_formulas=ws_formulas, computed_values=computed_value_overrides
+    )
     # word_exporter writes output_path via python-docx's own Document.save(), bypassing every
     # excel_io save helper (there's no openpyxl workbook to save here) — so it needs its own
     # explicit mirror to remote storage, same as any other save in excel_io.py.

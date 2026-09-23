@@ -198,8 +198,15 @@ def _format_number(value, number_format: str) -> str | None:
     return formatted
 
 
-def _cell_display_value(cell, formula_cell=None) -> str:
-    if cell.value is None:
+def _cell_display_value(cell, formula_cell=None, override_value=None) -> str:
+    value = cell.value
+    if value is None and override_value is not None:
+        # Univer's own live, client-side recalculated value for this exact cell, sent only for
+        # this one conversion (see ConvertWorksheetRequest's own docstring) — takes priority
+        # over falling back to literal formula text below, since a real number is what the
+        # user actually wants to see, not proof that the value was once lost.
+        value = override_value
+    if value is None:
         # `cell` comes from a data_only=True load, which for a formula cell gives *only* the
         # last cached result — nothing at all if that cache was ever lost (see
         # excel_io.save_workbook_preserving_formula_cache's own docstring for how that
@@ -210,23 +217,27 @@ def _cell_display_value(cell, formula_cell=None) -> str:
         if formula_cell is not None and formula_cell.data_type == "f":
             return str(formula_cell.value)
         return ""
-    if isinstance(cell.value, (datetime, date)):
+    if isinstance(value, (datetime, date)):
         # openpyxl hands back a real datetime/date object for a date-formatted cell (when
         # read with data_only=True) — str()'ing that directly gives an ugly
         # "2026-09-15 00:00:00" instead of anything resembling what Excel actually displays.
         # Not a full number-format-string interpreter — just the single most common case
         # that otherwise looks obviously broken.
-        if isinstance(cell.value, datetime) and (cell.value.hour or cell.value.minute):
-            return cell.value.strftime("%Y-%m-%d %H:%M")
-        return cell.value.strftime("%Y-%m-%d")
-    formatted = _format_number(cell.value, cell.number_format)
+        if isinstance(value, datetime) and (value.hour or value.minute):
+            return value.strftime("%Y-%m-%d %H:%M")
+        return value.strftime("%Y-%m-%d")
+    formatted = _format_number(value, cell.number_format)
     if formatted is not None:
         return formatted
-    return str(cell.value)
+    return str(value)
 
 
 def worksheet_to_docx(
-    ws: OpenpyxlWorksheet, output_path: Path, *, ws_formulas: OpenpyxlWorksheet | None = None
+    ws: OpenpyxlWorksheet,
+    output_path: Path,
+    *,
+    ws_formulas: OpenpyxlWorksheet | None = None,
+    computed_values: dict[tuple[int, int], object] | None = None,
 ) -> None:
     """Best-effort visual mirror of a worksheet as a Word table.
 
@@ -237,6 +248,11 @@ def worksheet_to_docx(
     going silently blank — see _cell_display_value(). Without it, such cells just render
     empty, which is why every existing caller that doesn't have a second load handy (all of
     this file's own tests) still works fine passing only `ws`.
+
+    `computed_values` is also optional: a `{(row, column): value}` override, keyed the same
+    way as cell.row/cell.column, taking priority over the formula-text fallback above (but
+    never over a genuine cached value already on `ws`) — see ConvertWorksheetRequest's own
+    docstring for where this comes from and why it exists.
 
     Column widths and font size are scaled together to fit one page width (see
     _compute_fit_to_page()) — the same tradeoff Excel's own "Fit to page width" print option
@@ -309,7 +325,8 @@ def worksheet_to_docx(
         for cell in row:
             doc_cell = doc_row_cells[cell.column - 1]
             formula_cell = ws_formulas.cell(row=cell.row, column=cell.column) if ws_formulas is not None else None
-            doc_cell.text = _cell_display_value(cell, formula_cell)
+            override_value = computed_values.get((cell.row, cell.column)) if computed_values else None
+            doc_cell.text = _cell_display_value(cell, formula_cell, override_value)
             paragraph = doc_cell.paragraphs[0]
             run = paragraph.runs[0] if paragraph.runs else paragraph.add_run("")
 
