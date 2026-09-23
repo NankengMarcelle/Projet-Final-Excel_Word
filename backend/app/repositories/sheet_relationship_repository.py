@@ -26,7 +26,7 @@ def list_for_workbook(db: Session, workbook_id: uuid.UUID) -> list[SheetRelation
     )
 
 
-def list_by_parent_worksheet_id(db: Session, parent_worksheet_id: uuid.UUID) -> list[SheetRelationship]:
+def list_by_parent_worksheet_id(db: Session, parent_worksheet_id: str) -> list[SheetRelationship]:
     return (
         db.query(SheetRelationship)
         .filter(SheetRelationship.parent_worksheet_id == parent_worksheet_id)
@@ -34,7 +34,7 @@ def list_by_parent_worksheet_id(db: Session, parent_worksheet_id: uuid.UUID) -> 
     )
 
 
-def list_by_child_worksheet_id(db: Session, child_worksheet_id: uuid.UUID) -> list[SheetRelationship]:
+def list_by_child_worksheet_id(db: Session, child_worksheet_id: str) -> list[SheetRelationship]:
     # A child sheet built from multiple sources has one row per contributing parent, all
     # sharing this child_worksheet_id — see migration a1b2c3d4e5f6 for why this is no longer
     # a unique lookup.

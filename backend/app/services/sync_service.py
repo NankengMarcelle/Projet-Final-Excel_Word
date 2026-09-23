@@ -31,7 +31,7 @@ def sync_child_sheet(
     workbook: Workbook,
     child_worksheet: Worksheet,
     relationships: list[SheetRelationship],
-    computed_values_by_parent: dict[uuid.UUID, list[tuple[int, int, object]]] = {},
+    computed_values_by_parent: dict[str, list[tuple[int, int, object]]] = {},
 ) -> list[SheetRelationship]:
     """Fully regenerates a child sheet's content from *all* of its current sources — the same
     "read every source fresh, combine, overwrite" pipeline create_child_sheet uses, just against
@@ -72,7 +72,8 @@ def sync_child_sheet(
     # the same workbook corrupted a real file live by each independently reading and rewriting
     # it at once. See excel_io.workbook_write_lock()'s own docstring for the full story.
     with excel_io.workbook_write_lock(path):
-        wb = excel_io.load_workbook(path, data_only=False)
+        wb = excel_io.load_workbook_for_write(path)
+        saved = False
         try:
             combined = child_sheet_combiner.build_combined_content(wb_values, wb, sources)
             child_ws = wb[child_worksheet.name]
@@ -89,8 +90,11 @@ def sync_child_sheet(
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own
             # docstring).
             excel_io.save_workbook_preserving_formula_cache(wb, path)
+            saved = True
         finally:
-            wb.close()
+            if not saved:
+                excel_io.discard_write_cache(path)
+                wb.close()
 
     now = datetime.now(timezone.utc)
     for relationship in relationships:

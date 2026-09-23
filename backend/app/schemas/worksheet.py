@@ -8,12 +8,26 @@ from pydantic import BaseModel, ConfigDict
 class WorksheetRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: uuid.UUID
+    # A plain string, not a UUID — a worksheet Univer created natively keeps its own
+    # Univer-generated id (not a UUID); see the Worksheet model's own comment.
+    id: str
     workbook_id: uuid.UUID
     name: str
     sheet_type: str
     position: int | None
     content_updated_at: datetime
+
+
+class WorksheetCreateRequest(BaseModel):
+    # Univer's own id for the sheet it already created natively, live, in the browser (its "+"
+    # add-sheet button) — this call is what persists that already-existing sheet, not what
+    # brings it into existence, so the id has to be Univer's, not one this app assigns.
+    id: str
+    # Univer already enforces sheet-name uniqueness client-side (its own "+" add-sheet button
+    # auto-generates a fresh "SheetN" name), so this is just what the user was already looking
+    # at when the create actually persisted — not re-validated for uniqueness beyond the same
+    # check worksheet_service.create_worksheet does against the real .xlsx file.
+    name: str
 
 
 class CellData(BaseModel):
@@ -27,6 +41,12 @@ class CellData(BaseModel):
     italic: bool
     font_color: str | None = None
     fill_color: str | None = None
+    # None means "this cell's font uses whatever openpyxl/the sheet already defaults to" —
+    # matches font_color's own None-means-default convention, not an empty string.
+    font_family: str | None = None
+    font_size: float | None = None
+    underline: bool = False
+    strikethrough: bool = False
     horizontal_alignment: str | None = None
     vertical_alignment: str | None = None
     borders: dict[str, str | None]
@@ -75,6 +95,14 @@ class WorksheetMetadataUpdate(BaseModel):
     then rebuild from exactly what's provided), not a diff against what was there before. See
     `app/spreadsheet/worksheet_metadata.py`'s module docstring for the reasoning."""
 
+    # Univer's own current tab name for this sheet — included here rather than as a separate
+    # rename endpoint, same reasoning as every other field below: Univer already owns and
+    # enforces this (its own rename UI, its own uniqueness check), this app's job is only to
+    # persist whatever Univer's snapshot currently says. None (not sent, or sent explicitly
+    # null) means "don't touch the sheet's name this save" — every real save from the frontend
+    # always includes it (see UniverSheetGrid.tsx's getWorksheetMetadata), so None only ever
+    # shows up from a caller (e.g. a test) that's deliberately not exercising renaming.
+    name: str | None = None
     merges: list[str] = []
     # A single Excel cell reference (e.g. "B2") marking the first cell *below and right of* the
     # frozen area, or None for no freeze — matches openpyxl's own `ws.freeze_panes` format
@@ -90,7 +118,7 @@ class WorksheetMetadataUpdate(BaseModel):
 
 
 class WorksheetData(BaseModel):
-    id: uuid.UUID
+    id: str
     name: str
     max_row: int
     max_column: int
@@ -124,9 +152,29 @@ class CellEdit(BaseModel):
     italic: bool | None = None
     font_color: str | None = None
     fill_color: str | None = None
+    font_family: str | None = None
+    font_size: float | None = None
+    underline: bool | None = None
+    strikethrough: bool | None = None
     horizontal_alignment: str | None = None
     vertical_alignment: str | None = None
     borders: dict[str, str | None] | None = None
+
+
+class StructuralShift(BaseModel):
+    # Mirrors Univer's own structural command names (see UniverSheetGrid.tsx's
+    # onCommandExecuted handler). This no longer tells the backend *how* to mutate the sheet
+    # (that's what `full_replace` + `edits` + `metadata` are for below — Univer already
+    # applied the shift client-side and this request's `edits` already reflects the
+    # post-shift state) — it only tells the backend which child-sheet relationships need
+    # their stored header rows/selected columns shifted to match. See
+    # worksheet_service._shift_relationships_for_structural_edit.
+    operation: Literal["insert_row", "remove_row", "insert_col", "remove_col"]
+    # 1-indexed, matching this backend's convention everywhere else (selected_columns,
+    # header_start_row/header_end_row, CellEdit.row/column) — the frontend converts Univer's
+    # own 0-indexed command range before sending.
+    start_index: int
+    count: int = 1
 
 
 class WorksheetEditRequest(BaseModel):
@@ -135,21 +183,17 @@ class WorksheetEditRequest(BaseModel):
     # edits); present = fully replace merges/freeze/column-row sizing/conditional formatting/
     # data validation/autofilter with exactly what's provided. See worksheet_metadata.py.
     metadata: WorksheetMetadataUpdate | None = None
-
-
-class StructuralEditRequest(BaseModel):
-    # Mirrors Univer's own structural command names (see UniverSheetGrid.tsx's
-    # onCommandExecuted handler) — the frontend detects an insert/delete row/column via
-    # Univer's command service rather than inferring it from a cell-value diff, and forwards
-    # it here as its own operation instead of folding it into WorksheetEditRequest's per-cell
-    # edits (see CLAUDE.md's "insert/delete row-column" section for why the value-diff
-    # approach corrupts merged cells and can't represent this at all).
-    operation: Literal["insert_row", "remove_row", "insert_col", "remove_col"]
-    # 1-indexed, matching this backend's convention everywhere else (selected_columns,
-    # header_start_row/header_end_row, CellEdit.row/column) — the frontend converts Univer's
-    # own 0-indexed command range before sending.
-    start_index: int
-    count: int = 1
+    # False (the common case) = `edits` is a sparse diff, every other cell on the sheet is left
+    # untouched. True = `edits` is Univer's *entire* current cellData for this sheet (every
+    # populated cell, not just what changed) — used for a structural edit (insert/delete
+    # row/column), where trusting Univer's own already-shifted snapshot wholesale replaces the
+    # old approach of replaying the operation via openpyxl (insert_rows/delete_rows + manual
+    # unmerge/remerge), which only ever existed to avoid corrupting merged cells. The backend
+    # recreates the sheet fresh before applying `edits` in this case, so any cell not present in
+    # `edits` (content that no longer exists post-shift) is correctly cleared, not left stale.
+    full_replace: bool = False
+    # Present only alongside full_replace=True — see StructuralShift's own docstring.
+    structural_shift: StructuralShift | None = None
 
 
 class WorksheetColumn(BaseModel):

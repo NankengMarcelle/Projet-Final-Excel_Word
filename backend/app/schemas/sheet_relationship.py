@@ -26,7 +26,7 @@ class ChildSheetSourceConfig(BaseModel):
     shared with any other source (see filter_engine.read_rows()'s docstring for why column
     identity has to be positional at all on a real multi-row-header matrix sheet)."""
 
-    parent_worksheet_id: uuid.UUID
+    parent_worksheet_id: str
     # Inclusive 1-indexed row range of this sheet's own header block — a plain single-row
     # header has header_start_row == header_end_row.
     header_start_row: int
@@ -55,7 +55,7 @@ class ChildSheetCreateRequest(BaseModel):
 
 
 class SyncSourceComputedValues(BaseModel):
-    worksheet_id: uuid.UUID
+    worksheet_id: str
     values: list[ComputedCellValue] = []
 
 
@@ -69,8 +69,8 @@ class SheetRelationshipRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    parent_worksheet_id: uuid.UUID
-    child_worksheet_id: uuid.UUID
+    parent_worksheet_id: str
+    child_worksheet_id: str
     header_start_row: int
     header_end_row: int
     selected_columns: list[int]
@@ -85,12 +85,12 @@ class ChildSheetCreateResponse(BaseModel):
 
 class ChildSheetSourceStatus(BaseModel):
     relationship_id: uuid.UUID
-    parent_worksheet_id: uuid.UUID
+    parent_worksheet_id: str
     is_outdated: bool
     last_synced_at: datetime | None
 
 
 class ChildSheetStatus(BaseModel):
-    child_worksheet_id: uuid.UUID
+    child_worksheet_id: str
     is_outdated: bool
     sources: list[ChildSheetSourceStatus]

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,13 +15,15 @@ class SheetRelationship(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    parent_worksheet_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True
+    # String, not UUID — matches worksheets.id (see that model's own comment on why: a
+    # Univer-created sheet's id isn't a UUID). This relationship's own id above is unaffected.
+    parent_worksheet_id: Mapped[str] = mapped_column(
+        String, ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # No longer unique: multi-sheet extraction lets several relationships (one per contributing
     # source sheet) share the same child_worksheet_id — see migration a1b2c3d4e5f6.
-    child_worksheet_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    child_worksheet_id: Mapped[str] = mapped_column(
+        String,
         ForeignKey("worksheets.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

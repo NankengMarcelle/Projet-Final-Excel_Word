@@ -13,7 +13,7 @@ from app.spreadsheet import child_sheet_combiner, excel_io, filter_engine
 
 
 def get_relationships_for_child_or_404(
-    db: Session, *, workbook_id: uuid.UUID, child_worksheet_id: uuid.UUID
+    db: Session, *, workbook_id: uuid.UUID, child_worksheet_id: str
 ) -> tuple[Worksheet, list[SheetRelationship]]:
     """Looks up every source relationship contributing to one child sheet (there's always at
     least one — a child sheet only ever exists with sources attached, see create_child_sheet),
@@ -67,7 +67,8 @@ def create_child_sheet(
     # corrupted a real file live by each independently reading and rewriting it at once. See
     # excel_io.workbook_write_lock()'s own docstring for the full story.
     with excel_io.workbook_write_lock(path):
-        wb = excel_io.load_workbook(path, data_only=False)
+        wb = excel_io.load_workbook_for_write(path)
+        saved = False
         try:
             # Styles/merges are read from *this* same-workbook, data_only=False view (passed
             # as wb_formulas below) — not wb_values above (a separate cached instance) — so
@@ -90,8 +91,11 @@ def create_child_sheet(
             # value, lost the same way apply_edits()'s save used to (see excel_io.py's own
             # docstring).
             excel_io.save_workbook_preserving_formula_cache(wb, path)
+            saved = True
         finally:
-            wb.close()
+            if not saved:
+                excel_io.discard_write_cache(path)
+                wb.close()
 
     position = len(worksheet_repository.list_for_workbook(db, workbook.id))
     child_worksheet = Worksheet(

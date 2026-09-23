@@ -27,7 +27,7 @@ def list_for_workbook(db: Session, workbook_id: uuid.UUID) -> list[Worksheet]:
     )
 
 
-def get_by_id_in_workbook(db: Session, worksheet_id: uuid.UUID, workbook_id: uuid.UUID) -> Worksheet | None:
+def get_by_id_in_workbook(db: Session, worksheet_id: str, workbook_id: uuid.UUID) -> Worksheet | None:
     return (
         db.query(Worksheet)
         .filter(Worksheet.id == worksheet_id, Worksheet.workbook_id == workbook_id)
@@ -35,7 +35,7 @@ def get_by_id_in_workbook(db: Session, worksheet_id: uuid.UUID, workbook_id: uui
     )
 
 
-def get_by_id(db: Session, worksheet_id: uuid.UUID) -> Worksheet | None:
+def get_by_id(db: Session, worksheet_id: str) -> Worksheet | None:
     return db.query(Worksheet).filter(Worksheet.id == worksheet_id).first()
 
 

@@ -46,13 +46,45 @@ def _upload_and_get_ids(api_client: TestClient, headers: dict, sample_xlsx_bytes
     return workbook_id, worksheet_id
 
 
+def _apply_structural_edit(
+    api_client: TestClient,
+    headers: dict,
+    workbook_id: str,
+    worksheet_id: str,
+    *,
+    edits: list[dict],
+    operation: str,
+    start_index: int,
+    count: int = 1,
+    metadata: dict | None = None,
+):
+    # Mirrors what the frontend now sends for a structural edit (see UniverSheetGrid.tsx /
+    # EditorPage.tsx): Univer has already performed and shifted the insert/delete client-side,
+    # so `edits` is its *entire* current cellData for the sheet, not a diff — the backend
+    # trusts it wholesale (full_replace=True) instead of replaying the operation itself via
+    # openpyxl. `structural_shift` carries only what's needed to keep child-sheet
+    # relationships' stored positions in sync (see _shift_relationships_for_structural_edit).
+    return api_client.put(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}",
+        headers=headers,
+        json={
+            "edits": edits,
+            "metadata": metadata or {},
+            "full_replace": True,
+            "structural_shift": {"operation": operation, "start_index": start_index, "count": count},
+        },
+    )
+
+
 def test_safe_unmerge_tolerates_a_non_anchor_cell_with_no_placeholder(tmp_path):
     """Regression test for a real crash found live against actual production data:
     openpyxl's own unmerge_cells() unconditionally does `del self._cells[(row, col)]` for
     every non-anchor cell in a merge, but a merge read from a real Excel-authored file can
     cover a cell that never had a placeholder there at all (a genuinely empty cell within the
     merge that Excel itself never wrote an XML <c> entry for) — that throws a bare KeyError.
-    safe_unmerge must tolerate this instead of crashing.
+    safe_unmerge must tolerate this instead of crashing. Still exercised by
+    worksheet_metadata.apply_worksheet_metadata whenever a full_replace's `metadata.merges`
+    changes what's merged on a freshly recreated sheet.
     """
     wb = Workbook()
     ws = wb.active
@@ -68,27 +100,49 @@ def test_safe_unmerge_tolerates_a_non_anchor_cell_with_no_placeholder(tmp_path):
     assert ws["A1"].value == "Title"
 
 
-def test_insert_row_shifts_content_down_without_crashing_on_the_merged_cell(
+def test_full_replace_writes_the_shifted_content_and_clears_stale_cells(
     api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
 ):
     workbook_id, worksheet_id = _upload_and_get_ids(api_client, auth_headers, sample_xlsx_bytes)
 
-    # Inserting above row 5 (the merged "Total" row) is exactly the shape that crashed the old
-    # value-diff-based autosave (a shifted cell edit landing on a MergedCell's read-only
-    # .value) — this endpoint performs the real structural operation instead.
-    response = api_client.patch(
-        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}/structure",
-        headers=auth_headers,
-        json={"operation": "insert_row", "start_index": 2, "count": 1},
+    # Inserting a row at index 2 (Univer's own already-shifted view): the old row 2 (Alice) is
+    # now row 3, row 2 itself is blank, and the merged "Total" row shifted from 5 to 6 with its
+    # formula's reference following it.
+    edits = [
+        {"row": 1, "column": 1, "value": "Name"},
+        {"row": 1, "column": 2, "value": "Status"},
+        {"row": 1, "column": 3, "value": "Amount"},
+        {"row": 3, "column": 1, "value": "Alice"},
+        {"row": 3, "column": 2, "value": "Active"},
+        {"row": 3, "column": 3, "value": 100},
+        {"row": 4, "column": 1, "value": "Bob"},
+        {"row": 4, "column": 2, "value": "Inactive"},
+        {"row": 4, "column": 3, "value": 200},
+        {"row": 5, "column": 1, "value": "Carol"},
+        {"row": 5, "column": 2, "value": "Active"},
+        {"row": 5, "column": 3, "value": 300},
+        {"row": 6, "column": 2, "value": "Total"},
+        {"row": 6, "column": 3, "value": "=SUM(C3:C5)"},
+    ]
+    response = _apply_structural_edit(
+        api_client,
+        auth_headers,
+        workbook_id,
+        worksheet_id,
+        edits=edits,
+        operation="insert_row",
+        start_index=2,
+        metadata={"merges": ["A6:B6"]},
     )
     assert response.status_code == 200
 
     data = api_client.get(f"/workbooks/{workbook_id}/worksheets/{worksheet_id}", headers=auth_headers).json()
-    # Alice used to be row 2, now shifted to row 3.
     assert _get_cell(data["cells"], row=3, column=1)["value"] == "Alice"
-    # The merged "Total" row shifted from row 5 to row 6.
     assert "A6:B6" in data["merged_cells"]
-    assert _get_cell(data["cells"], row=6, column=3)["formula"] is not None
+    assert _get_cell(data["cells"], row=6, column=3)["formula"] == "=SUM(C3:C5)"
+    # The old row 2 (blank post-shift) must not still hold the pre-shift "Alice" — the whole
+    # point of recreating the sheet on full_replace instead of patching cells in place.
+    assert not any(c["row"] == 2 and c["column"] == 1 for c in data["cells"])
 
 
 def test_remove_col_shifts_and_cascades_child_sheet_selection(
@@ -107,11 +161,26 @@ def test_remove_col_shifts_and_cascades_child_sheet_selection(
 
     # Delete "Status" (column 2) — not itself selected, but Amount (column 3) needs to shift
     # down to 2, and the filter condition referencing column 2 needs to be dropped entirely
-    # (the column it filtered on no longer exists).
-    response = api_client.patch(
-        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}/structure",
-        headers=auth_headers,
-        json={"operation": "remove_col", "start_index": 2, "count": 1},
+    # (the column it filtered on no longer exists). Univer's own post-shift cellData for the
+    # remaining two columns:
+    edits = [
+        {"row": 1, "column": 1, "value": "Name"},
+        {"row": 1, "column": 2, "value": "Amount"},
+        {"row": 2, "column": 1, "value": "Alice"},
+        {"row": 2, "column": 2, "value": 100},
+        {"row": 3, "column": 1, "value": "Bob"},
+        {"row": 3, "column": 2, "value": 200},
+        {"row": 4, "column": 1, "value": "Carol"},
+        {"row": 4, "column": 2, "value": 300},
+    ]
+    response = _apply_structural_edit(
+        api_client,
+        auth_headers,
+        workbook_id,
+        worksheet_id,
+        edits=edits,
+        operation="remove_col",
+        start_index=2,
     )
     assert response.status_code == 200
 
@@ -138,10 +207,24 @@ def test_remove_col_cascades_a_selected_column_deletion_to_the_child_sheet(
     # column, so the child sheet's selection should lose it too, not keep pointing at
     # whatever now sits at position 1 (per the user's own call: "if the parent looses the
     # data, the child should normally too").
-    response = api_client.patch(
-        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}/structure",
-        headers=auth_headers,
-        json={"operation": "remove_col", "start_index": 1, "count": 1},
+    edits = [
+        {"row": 1, "column": 1, "value": "Status"},
+        {"row": 1, "column": 2, "value": "Amount"},
+        {"row": 2, "column": 1, "value": "Active"},
+        {"row": 2, "column": 2, "value": 100},
+        {"row": 3, "column": 1, "value": "Inactive"},
+        {"row": 3, "column": 2, "value": 200},
+        {"row": 4, "column": 1, "value": "Active"},
+        {"row": 4, "column": 2, "value": 300},
+    ]
+    response = _apply_structural_edit(
+        api_client,
+        auth_headers,
+        workbook_id,
+        worksheet_id,
+        edits=edits,
+        operation="remove_col",
+        start_index=1,
     )
     assert response.status_code == 200
 
@@ -169,10 +252,28 @@ def test_insert_col_shifts_child_sheet_selection_up(
     relationship_id = create_response.json()["relationships"][0]["id"]
 
     # Insert a new column before everything — every existing column shifts right by 1.
-    response = api_client.patch(
-        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}/structure",
-        headers=auth_headers,
-        json={"operation": "insert_col", "start_index": 1, "count": 1},
+    edits = [
+        {"row": 1, "column": 2, "value": "Name"},
+        {"row": 1, "column": 3, "value": "Status"},
+        {"row": 1, "column": 4, "value": "Amount"},
+        {"row": 2, "column": 2, "value": "Alice"},
+        {"row": 2, "column": 3, "value": "Active"},
+        {"row": 2, "column": 4, "value": 100},
+        {"row": 3, "column": 2, "value": "Bob"},
+        {"row": 3, "column": 3, "value": "Inactive"},
+        {"row": 3, "column": 4, "value": 200},
+        {"row": 4, "column": 2, "value": "Carol"},
+        {"row": 4, "column": 3, "value": "Active"},
+        {"row": 4, "column": 4, "value": 300},
+    ]
+    response = _apply_structural_edit(
+        api_client,
+        auth_headers,
+        workbook_id,
+        worksheet_id,
+        edits=edits,
+        operation="insert_col",
+        start_index=1,
     )
     assert response.status_code == 200
 

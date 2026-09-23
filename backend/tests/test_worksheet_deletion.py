@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 import io
@@ -43,6 +45,56 @@ def _create_child_sheet(api_client: TestClient, headers: dict, workbook_id: str,
     )
     assert response.status_code == 201
     return response.json()
+
+
+def test_create_worksheet_adds_it_to_the_file_and_db(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+
+    # A short, non-UUID string on purpose — this is exactly the id shape Univer's own "+"
+    # add-sheet button generates client-side (see worksheets.id's own model comment), and this
+    # request is what persists a sheet Univer already created with that id, not what assigns one.
+    # Suffixed with a fresh uuid4 (not the id's own format Univer would use, just for this
+    # test's own uniqueness against leftover data from a previous run) since worksheets.id has
+    # no per-test transaction rollback here.
+    new_id = f"k3j9x2-{uuid.uuid4()}"
+    create_response = api_client.post(
+        f"/workbooks/{workbook_id}/worksheets",
+        headers=auth_headers,
+        json={"id": new_id, "name": "Sheet2"},
+    )
+    assert create_response.status_code == 201
+    body = create_response.json()
+    assert body["id"] == new_id
+    assert body["name"] == "Sheet2"
+    assert body["sheet_type"] == "original"
+
+    # Persists past this request — a fresh GET (a real backend-round-trip, not just the create
+    # response echoing back what was sent) finds it too.
+    get_response = api_client.get(
+        f"/workbooks/{workbook_id}/worksheets/{body['id']}", headers=auth_headers
+    )
+    assert get_response.status_code == 200
+
+    wb = _download_workbook(api_client, auth_headers, workbook_id)
+    assert "Sheet2" in wb.sheetnames
+    assert "Data" in wb.sheetnames
+
+
+def test_cannot_create_a_worksheet_with_a_name_that_already_exists(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+
+    response = api_client.post(
+        f"/workbooks/{workbook_id}/worksheets",
+        headers=auth_headers,
+        json={"id": str(uuid.uuid4()), "name": "Data"},
+    )
+    assert response.status_code == 400
 
 
 def test_delete_worksheet_with_no_relationships_removes_it_from_file_and_db(

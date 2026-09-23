@@ -1,22 +1,33 @@
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.styles.colors import Color
 from openpyxl.worksheet.worksheet import Worksheet as OpenpyxlWorksheet
 
 
 def _apply_font(cell, edit: dict) -> None:
-    if not any(key in edit for key in ("bold", "italic", "font_color")):
+    if not any(
+        key in edit
+        for key in ("bold", "italic", "font_color", "font_family", "font_size", "underline", "strikethrough")
+    ):
         return
     existing = cell.font
     color = existing.color
     if "font_color" in edit:
         color = Color(rgb=edit["font_color"]) if edit["font_color"] else None
+    # openpyxl's own Font.underline is a style name ("single"/"double"/...), not a boolean —
+    # Univer's own model only ever tracks "underlined or not" (see adapter.ts's IStyleData.ul),
+    # so True always means the single-line style, matching what Univer's own toolbar toggle
+    # actually offers.
+    underline = existing.underline
+    if "underline" in edit:
+        underline = "single" if edit["underline"] else None
     cell.font = Font(
-        name=existing.name,
-        size=existing.size,
+        name=edit.get("font_family", existing.name),
+        size=edit.get("font_size", existing.size),
         bold=edit.get("bold", existing.bold),
         italic=edit.get("italic", existing.italic),
-        underline=existing.underline,
-        strike=existing.strike,
+        underline=underline,
+        strike=edit.get("strikethrough", existing.strike),
         color=color,
     )
 
@@ -64,13 +75,14 @@ def _apply_border(cell, edit: dict) -> None:
 def apply_cell_edits(ws: OpenpyxlWorksheet, edits: list[dict]) -> None:
     """Apply `{row, column, value, ...style fields}` edits to a worksheet.
 
-    Each style field (number_format/bold/italic/font_color/fill_color/
-    horizontal_alignment/vertical_alignment/borders) is PATCH-semantic: a field the caller
-    never included in an edit dict (checked via `"field" in edit`, not truthiness — see
-    `exclude_unset=True` in the route handler) is left exactly as it was on the existing
-    cell. Everything not explicitly touched — including font attributes this app doesn't
-    otherwise track, like font family/size/underline — survives an edit round-trip, the
-    same guarantee the old value-only version of this function made.
+    Each style field (number_format/bold/italic/font_color/fill_color/font_family/font_size/
+    underline/strikethrough/horizontal_alignment/vertical_alignment/borders) is PATCH-
+    semantic: a field the caller never included in an edit dict (checked via `"field" in
+    edit`, not truthiness — see `exclude_unset=True` in the route handler) is left exactly as
+    it was on the existing cell. Everything not explicitly touched — including font
+    attributes this app still doesn't track, like superscript/subscript or text rotation —
+    survives an edit round-trip, the same guarantee the old value-only version of this
+    function made.
 
     `.value` is set directly rather than via `ws.cell(row, column, value=...)`: that
     convenience method treats `value=None` as "no value was passed" and silently skips the
@@ -79,6 +91,17 @@ def apply_cell_edits(ws: OpenpyxlWorksheet, edits: list[dict]) -> None:
     """
     for edit in edits:
         cell = ws.cell(row=edit["row"], column=edit["column"])
+        if isinstance(cell, MergedCell):
+            # Univer has no concept of a merge's non-anchor cells carrying independent
+            # content — only the anchor holds a real value/style in its model, confirmed live
+            # against a real crash: a plain text edit inside a large multi-row merge produced
+            # an edit for one of the merge's own non-anchor coordinates (Univer's own
+            # getSnapshot() is documented elsewhere in this codebase as occasionally
+            # inconsistent about exactly this), and openpyxl's MergedCell.value is read-only —
+            # `cell.value = ...` below raises AttributeError, not a no-op. Skipping is safe:
+            # this coordinate has no content of its own by definition, and the merge's real
+            # anchor cell is addressed by its own separate edit entry if it actually changed.
+            continue
         if "value" in edit:
             cell.value = edit["value"]
         if "number_format" in edit:

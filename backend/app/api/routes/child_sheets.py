@@ -65,7 +65,7 @@ def create_child_sheet(
 @router.get("/by-child/{child_worksheet_id}/status", response_model=ChildSheetStatus)
 def get_child_sheet_status(
     workbook_id: uuid.UUID,
-    child_worksheet_id: uuid.UUID,
+    child_worksheet_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -94,7 +94,7 @@ def get_child_sheet_status(
 @router.post("/by-child/{child_worksheet_id}/sync", response_model=list[SheetRelationshipRead])
 def sync_child_sheet(
     workbook_id: uuid.UUID,
-    child_worksheet_id: uuid.UUID,
+    child_worksheet_id: str,
     payload: SyncChildSheetRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

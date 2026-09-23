@@ -92,6 +92,10 @@ def test_edit_worksheet_can_set_formatting_on_a_plain_cell(
                     "italic": True,
                     "font_color": "FFFF0000",
                     "fill_color": "FF00FF00",
+                    "font_family": "Times New Roman",
+                    "font_size": 14,
+                    "underline": True,
+                    "strikethrough": True,
                     "horizontal_alignment": "center",
                     "vertical_alignment": "top",
                     "number_format": "0.00%",
@@ -111,10 +115,44 @@ def test_edit_worksheet_can_set_formatting_on_a_plain_cell(
     assert cell["italic"] is True
     assert cell["font_color"] == "FFFF0000"
     assert cell["fill_color"] == "FF00FF00"
+    assert cell["font_family"] == "Times New Roman"
+    assert cell["font_size"] == 14
+    assert cell["underline"] is True
+    assert cell["strikethrough"] is True
     assert cell["horizontal_alignment"] == "center"
     assert cell["vertical_alignment"] == "top"
     assert cell["number_format"] == "0.00%"
     assert cell["borders"] == {"top": "thin", "bottom": None, "left": None, "right": "thick"}
+
+
+def test_edit_worksheet_font_change_leaves_other_style_fields_untouched(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Regression test: font_family/font_size/underline/strikethrough are new, additive
+    # fields on top of the existing bold/italic/color style handling — a PATCH-semantic edit
+    # that only touches the new fields must not disturb bold (already set on the header row
+    # by the sample fixture) or any other untouched style.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    worksheet_id = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()["worksheets"][0]["id"]
+
+    edit_response = api_client.put(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}",
+        headers=auth_headers,
+        json={"edits": [{"row": 1, "column": 1, "font_family": "Georgia", "font_size": 16}]},
+    )
+    assert edit_response.status_code == 200
+
+    data = api_client.get(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}", headers=auth_headers
+    ).json()
+    cell = _get_cell(data["cells"], row=1, column=1)
+    assert cell["value"] == "Name"
+    assert cell["font_family"] == "Georgia"
+    assert cell["font_size"] == 16
+    # Untouched — the sample fixture's header row is bold with a yellow fill.
+    assert cell["bold"] is True
+    assert cell["fill_color"] == "00FFFF00"
 
 
 def test_edit_worksheet_value_only_edit_leaves_existing_style_untouched(
@@ -201,6 +239,40 @@ def test_edit_worksheet_can_clear_a_cell_value(
     # `_cell_has_signal`) — its absence here *is* the assertion that it
     # was actually cleared, not left at its old value.
     assert all(not (c["row"] == 2 and c["column"] == 2) for c in after["cells"])
+
+
+def test_edit_worksheet_metadata_name_renames_the_sheet_and_it_survives_reload(
+    api_client: TestClient, auth_headers: dict, sample_xlsx_bytes: bytes
+):
+    # Regression test: renaming a sheet via Univer's own tab-rename UI used to not persist at
+    # all — UniverSheetGrid.tsx never listened for Univer's rename mutation, so nothing was
+    # ever sent to the backend and a reload silently reverted to the old name. The fix routes
+    # a rename through the same generalized metadata channel merges/freeze/etc. already use
+    # (WorksheetMetadataUpdate.name), not a dedicated rename endpoint.
+    created = _upload_sample(api_client, auth_headers, sample_xlsx_bytes)
+    workbook_id = created["id"]
+    worksheet_id = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()["worksheets"][0]["id"]
+
+    edit_response = api_client.put(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}",
+        headers=auth_headers,
+        json={"edits": [], "metadata": {"name": "Employees"}},
+    )
+    assert edit_response.status_code == 200
+    assert edit_response.json()["name"] == "Employees"
+
+    # Simulates a reload: a completely fresh read of both the workbook's worksheet list and
+    # this worksheet's own data — neither the DB row nor the real .xlsx sheet title should
+    # have reverted to the pre-rename name.
+    workbook = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()
+    assert workbook["worksheets"][0]["name"] == "Employees"
+
+    data = api_client.get(
+        f"/workbooks/{workbook_id}/worksheets/{worksheet_id}", headers=auth_headers
+    ).json()
+    assert data["name"] == "Employees"
+    # The rename didn't disturb this sheet's actual content.
+    assert _get_cell(data["cells"], row=1, column=1)["value"] == "Name"
 
 
 def test_list_worksheet_columns_labels_by_index_not_name(

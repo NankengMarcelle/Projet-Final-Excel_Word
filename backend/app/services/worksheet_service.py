@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import HTTPException, status
-from openpyxl.utils import get_column_letter, range_boundaries
+from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.models.workbook import Workbook
@@ -13,10 +13,10 @@ from app.models.worksheet import Worksheet
 from app.repositories import sheet_relationship_repository, worksheet_repository
 from app.schemas.worksheet import CellData, WorksheetColumn, WorksheetData, WorksheetMetadataUpdate
 from app.spreadsheet import cell_editor, excel_io, filter_engine, worksheet_metadata
-from app.spreadsheet.cell_signal import cell_has_signal, color_to_hex
+from app.spreadsheet.cell_signal import cell_has_signal, color_to_hex, used_range
 
 
-def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: uuid.UUID) -> Worksheet:
+def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: str) -> Worksheet:
     worksheet = worksheet_repository.get_by_id_in_workbook(db, worksheet_id, workbook_id)
     if worksheet is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worksheet not found")
@@ -35,11 +35,33 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
     # file. Never close() these — the cache owns their lifecycle.
     wb_formulas = excel_io.load_workbook_cached(path, data_only=False)
     wb_values = excel_io.load_workbook_cached(path, data_only=True)
+    # A worksheet row can outlive its actual sheet in the .xlsx file — e.g. delete_worksheet()
+    # above already tolerates this (`if worksheet.name in wb.sheetnames`) for a parent sheet
+    # left behind by a past bug or manual DB edit. The read path had no equivalent guard: an
+    # unchecked wb_formulas[worksheet.name] raised a bare KeyError straight into a 500, and the
+    # frontend's sequential per-sheet loader (EditorPage.tsx) has no way to skip just the one
+    # bad sheet — it retried the *entire* workbook's fetch from scratch a few times (React
+    # Query's default retry) before giving up, which is what a stuck "keeps reloading" workbook
+    # open turned out to be. Fail with a clear, specific 404 instead of a crash.
+    if worksheet.name not in wb_formulas.sheetnames:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Worksheet '{worksheet.name}' has a database record but no matching sheet in the workbook file",
+        )
     ws_formulas = wb_formulas[worksheet.name]
     ws_values = wb_values[worksheet.name]
 
+    # Bounded by used_range(), not ws_formulas.max_row/max_column directly — a real, long-lived
+    # workbook's declared dimensions can be dramatically larger than its actual content (see
+    # used_range()'s own docstring: one sheet in this app's own test data declares 528x525
+    # (277,200 cells) while only ~7,400 (2.7%) have any real content, from formatting once
+    # applied across a huge range that was never cleared back out). Every cell in that gap still
+    # got a full CellData built for it — color/border/alignment extraction plus a Pydantic
+    # model — the expensive part of this loop, not the cheap has-signal check used_range() itself
+    # does. Confirmed live: this exact sheet took 78s to load before this fix.
+    max_row, max_col = used_range(ws_formulas)
     cells: list[CellData] = []
-    for row in ws_formulas.iter_rows(min_row=1, max_row=ws_formulas.max_row, max_col=ws_formulas.max_column):
+    for row in ws_formulas.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
         for cell in row:
             if not cell_has_signal(cell):
                 continue
@@ -59,6 +81,14 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
                     bold=bool(cell.font.bold),
                     italic=bool(cell.font.italic),
                     font_color=color_to_hex(cell.font.color),
+                    font_family=cell.font.name,
+                    font_size=cell.font.size,
+                    # openpyxl's own Font.underline is a style name ("single"/"double"/...) or
+                    # None — collapsed to a plain bool here since Univer's own model (and this
+                    # app's edit side, see cell_editor._apply_font) only ever tracks
+                    # "underlined or not," never which specific underline style.
+                    underline=cell.font.underline is not None,
+                    strikethrough=bool(cell.font.strike),
                     # Only "solid" actually paints fgColor as a flat background in Excel's own
                     # rendering. Any other fill_type Excel and openpyxl left non-None — most
                     # commonly "gray125", the legacy default marker OOXML silently writes onto
@@ -115,7 +145,25 @@ def apply_edits(
     worksheet: Worksheet,
     edits: list[dict],
     metadata: WorksheetMetadataUpdate | None = None,
+    full_replace: bool = False,
+    structural_shift: dict | None = None,
 ) -> Worksheet:
+    """Applies `edits` to this worksheet and saves.
+
+    full_replace=False (the ordinary case): `edits` is a sparse diff — every cell not
+    mentioned is left exactly as it was.
+
+    full_replace=True: `edits` is Univer's *entire* current cellData for this sheet, sent
+    after a structural edit (insert/delete row/column). Univer already performed and shifted
+    the edit client-side — trusting its snapshot wholesale means the sheet is recreated fresh
+    (clearing anything not in `edits`, e.g. content that no longer exists post-shift) rather
+    than replaying the operation via openpyxl's own insert_rows/delete_rows, which only ever
+    existed here to avoid corrupting merged cells during that replay. Merges/freeze/sizing
+    come from `metadata` instead, exactly as Univer's own snapshot currently reports them.
+    `structural_shift` carries the operation/start_index/count purely so any child-sheet
+    relationships rooted on this sheet can have their stored positions shifted to match — see
+    _shift_relationships_for_structural_edit.
+    """
     # TEMPORARY: total end-to-end timer for the live latency investigation — see excel_io.py's
     # _perf_log for the per-phase breakdown this should sum to. Remove both once diagnosed.
     request_start = time.perf_counter()
@@ -124,15 +172,43 @@ def apply_edits(
     # the same workbook (or an edit racing a child-sheet create/sync) corrupted a real file
     # live by each independently reading and rewriting it at once. See
     # excel_io.workbook_write_lock()'s own docstring for the full story.
-    with excel_io.workbook_write_lock(path):
-        wb = excel_io.load_workbook(path, data_only=False)
+    #
+    # TEMPORARY: manual acquire (instead of `with excel_io.workbook_write_lock(path):`) so the
+    # wait to acquire it can be timed separately from the work done while holding it — part of
+    # the same live latency investigation as request_start above. Remove together.
+    lock = excel_io.workbook_write_lock(path)
+    lock_wait_start = time.perf_counter()
+    lock.acquire()
+    print(f"[PERF] apply_edits: lock acquisition wait: {time.perf_counter() - lock_wait_start:.3f}s", flush=True)
+    try:
+        # load_workbook_for_write (not the plain load_workbook a bare read would use) reuses a
+        # still-fresh Workbook object left over from an immediately-preceding write to this
+        # same file — see that function's own comment for why a single user action (e.g. a
+        # structural edit that makes Univer recalculate several other cross-referenced sheets,
+        # each firing its own autosave) can trigger a whole cascade of saves back to back.
+        wb = excel_io.load_workbook_for_write(path)
+        saved = False
         try:
-            ws = wb[worksheet.name]
+            if full_replace:
+                # Recreate the sheet fresh at the same position rather than mutating it in
+                # place — `edits` is Univer's entire current cellData, so anything not in it
+                # (content that no longer exists post-shift, e.g. the row/column just deleted)
+                # must be cleared, not left stale. This also sidesteps needing to unmerge/shift/
+                # remerge in Python at all: merges come from `metadata` below, already computed
+                # by Univer against the post-shift sheet.
+                sheet_index = wb.sheetnames.index(worksheet.name)
+                del wb[worksheet.name]
+                ws = wb.create_sheet(worksheet.name, sheet_index)
+            else:
+                ws = wb[worksheet.name]
             cell_editor.apply_cell_edits(ws, edits)
             # The cell(s) this edit actually touched are excluded from cache restoration — see
             # save_workbook_preserving_formula_cache()'s own docstring for why reapplying their
             # *pre-edit* cached value would be wrong (most importantly when the edit changed the
-            # formula itself).
+            # formula itself). A full_replace touches every cell on the sheet by definition, so
+            # this sheet's cache is skipped entirely instead — same effect, and matches how a
+            # structural edit's own sheet was already excluded from cache restoration before
+            # this change (its coordinates all just shifted anyway).
             edited_coordinates = {
                 (worksheet.name, ws.cell(row=edit["row"], column=edit["column"]).coordinate)
                 for edit in edits
@@ -143,15 +219,83 @@ def apply_edits(
             # currently says. See worksheet_metadata.py.
             if metadata is not None:
                 worksheet_metadata.apply_worksheet_metadata(ws, metadata)
-            excel_io.save_workbook_preserving_formula_cache(wb, path, exclude=edited_coordinates)
+            if full_replace:
+                excel_io.save_workbook_preserving_formula_cache(wb, path, skip_sheets={worksheet.name})
+            else:
+                excel_io.save_workbook_preserving_formula_cache(wb, path, exclude=edited_coordinates)
+            saved = True
         finally:
-            wb.close()
+            # On success, save_workbook_preserving_formula_cache already handed wb to the write
+            # cache — closing it here would make the very reuse this all exists for immediately
+            # invalid. On failure, wb may be left partially mutated, so it (and anything already
+            # cached for this path) must not be reused by a later write.
+            if not saved:
+                excel_io.discard_write_cache(path)
+                wb.close()
+    finally:
+        lock.release()
 
     worksheet.content_updated_at = datetime.now(timezone.utc)
+    # Renamed via the same metadata channel as merges/freeze/etc. (see WorksheetMetadataUpdate.
+    # name's own docstring) — the file's sheet title was already renamed above, inside the
+    # write lock; this is just the DB row catching up so `wb[worksheet.name]` lookups on every
+    # other write path keep matching the real file.
+    if metadata is not None and metadata.name and metadata.name != worksheet.name:
+        worksheet.name = metadata.name
+    if structural_shift is not None:
+        _shift_relationships_for_structural_edit(
+            db,
+            parent_worksheet_id=worksheet.id,
+            operation=structural_shift["operation"],
+            start_index=structural_shift["start_index"],
+            count=structural_shift["count"],
+        )
     db.commit()
     db.refresh(worksheet)
     print(f"[PERF] apply_edits: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return worksheet
+
+
+def create_worksheet(db: Session, *, workbook: Workbook, worksheet_id: str, name: str) -> Worksheet:
+    """Persists a worksheet Univer already created natively, live, in the browser (its own "+"
+    add-sheet tab button) — the mirror image of delete_worksheet below, and symmetric with it:
+    Univer's own command runs immediately and un-intercepted in either direction, this app just
+    hears about the result afterward (see UniverSheetGrid.tsx's onSheetInserted comment).
+
+    worksheet_id is Univer's own id for the sheet, not one this app assigns — worksheets.id is a
+    plain string specifically so it can hold either a real UUID (every other creation path here
+    still generates one, via the Worksheet model's own default) or one of Univer's own
+    short-random-string ids, without this app ever needing to reconcile the two.
+    """
+    path = Path(workbook.storage_path)
+    with excel_io.workbook_write_lock(path):
+        wb = excel_io.load_workbook_for_write(path)
+        saved = False
+        try:
+            if name in wb.sheetnames:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"A worksheet named '{name}' already exists in this workbook",
+                )
+            wb.create_sheet(title=name)
+            excel_io.save_workbook_preserving_formula_cache(wb, path)
+            saved = True
+        finally:
+            if not saved:
+                excel_io.discard_write_cache(path)
+                wb.close()
+
+    existing = worksheet_repository.list_for_workbook(db, workbook.id)
+    next_position = max((w.position for w in existing if w.position is not None), default=-1) + 1
+    worksheet = Worksheet(
+        id=worksheet_id, workbook_id=workbook.id, name=name, sheet_type="original", position=next_position
+    )
+    worksheet_repository.create(db, worksheet)
+    db.commit()
+    db.refresh(worksheet)
+    return worksheet
+
+
 
 
 def delete_worksheet(db: Session, *, workbook: Workbook, worksheet: Worksheet) -> None:
@@ -177,7 +321,8 @@ def delete_worksheet(db: Session, *, workbook: Workbook, worksheet: Worksheet) -
     """
     path = Path(workbook.storage_path)
     with excel_io.workbook_write_lock(path):
-        wb = excel_io.load_workbook(path, data_only=False)
+        wb = excel_io.load_workbook_for_write(path)
+        saved = False
         try:
             if worksheet.name in wb.sheetnames:
                 if len(wb.sheetnames) <= 1:
@@ -187,89 +332,13 @@ def delete_worksheet(db: Session, *, workbook: Workbook, worksheet: Worksheet) -
                     )
                 del wb[worksheet.name]
             excel_io.save_workbook_preserving_formula_cache(wb, path)
+            saved = True
         finally:
-            wb.close()
+            if not saved:
+                excel_io.discard_write_cache(path)
+                wb.close()
 
     worksheet_repository.delete(db, worksheet)
-
-
-def apply_structural_edit(
-    db: Session,
-    *,
-    workbook: Workbook,
-    worksheet: Worksheet,
-    operation: str,
-    start_index: int,
-    count: int,
-) -> Worksheet:
-    """Inserting/deleting a row or column via Univer's own UI used to be sent to the backend
-    as a giant batch of per-cell value edits (reconstructing the shift as a diff) — that
-    silently corrupted merged cells (a shifted edit lands on a MergedCell's read-only .value)
-    and had no way to represent the operation at all beyond plain cell values. This applies
-    the real structural operation directly via openpyxl instead, detected frontend-side from
-    Univer's own command service (see UniverSheetGrid.tsx) rather than inferred from a diff.
-    """
-    path = Path(workbook.storage_path)
-    # Held for the whole load-mutate-save cycle — same reasoning as apply_edits().
-    with excel_io.workbook_write_lock(path):
-        wb = excel_io.load_workbook(path, data_only=False)
-        try:
-            ws = wb[worksheet.name]
-            # Unmerge everything *before* the shift, not after: a merge's non-anchor cells are
-            # placeholder MergedCell objects living in ws._cells at their own coordinates, and
-            # insert/delete_rows/cols moves *everything* in ws._cells (confirmed by reading its
-            # source — Worksheet._move_cells has no special case for them) including those
-            # placeholders. Computing "the new range" and calling unmerge_cells(old_coord)
-            # afterward hits a stale coordinate whose placeholder has already been moved out
-            # from under it. Unmerging first (while coordinates still match reality), then
-            # shifting, then re-merging at the already-computed new coordinates sidesteps that.
-            #
-            # openpyxl's own unmerge_cells() still isn't safe to call here though — confirmed
-            # live against this app's real data: it unconditionally does `del
-            # self._cells[(row, col)]` for every non-anchor cell, but a merge read from a real
-            # Excel-authored file can cover a cell that never had an XML <c> entry at all (a
-            # genuinely empty cell inside the merge) — openpyxl's reader doesn't backfill a
-            # MergedCell placeholder for those the way ws.merge_cells() would if called
-            # programmatically, so the naive delete throws a bare KeyError.
-            # filter_engine.safe_unmerge below does the same thing openpyxl's own method does,
-            # just tolerating an entry that was never there to begin with (shared with
-            # filter_engine.write_rows(), which needs the identical tolerance for the same
-            # reason when re-writing a child sheet's own merges on sync).
-            old_merged_ranges = [str(cell_range) for cell_range in ws.merged_cells.ranges]
-            for coord in old_merged_ranges:
-                filter_engine.safe_unmerge(ws, coord)
-
-            if operation == "insert_row":
-                ws.insert_rows(start_index, count)
-            elif operation == "remove_row":
-                ws.delete_rows(start_index, count)
-            elif operation == "insert_col":
-                ws.insert_cols(start_index, count)
-            elif operation == "remove_col":
-                ws.delete_cols(start_index, count)
-
-            _remerge_shifted_ranges(
-                ws=ws, old_ranges=old_merged_ranges, operation=operation, start_index=start_index, count=count
-            )
-            # Every cell on *this* sheet just shifted position — see
-            # save_workbook_preserving_formula_cache's skip_sheets docstring for why its
-            # formula caches can't be safely restored by coordinate after that. Every other
-            # sheet in the workbook is untouched by this operation and still safe to restore.
-            excel_io.save_workbook_preserving_formula_cache(wb, path, skip_sheets={worksheet.name})
-        finally:
-            wb.close()
-
-    worksheet.content_updated_at = datetime.now(timezone.utc)
-    _shift_relationships_for_structural_edit(
-        db,
-        parent_worksheet_id=worksheet.id,
-        operation=operation,
-        start_index=start_index,
-        count=count,
-    )
-    db.commit()
-    db.refresh(worksheet)
-    return worksheet
 
 
 def _shift_bound_after_deletion(bound: int, deleted_from: int, deleted_to: int, count: int) -> int:
@@ -278,33 +347,6 @@ def _shift_bound_after_deletion(bound: int, deleted_from: int, deleted_to: int, 
     if bound > deleted_to:
         return bound - count
     return bound
-
-
-def _remerge_shifted_ranges(
-    *, ws, old_ranges: list[str], operation: str, start_index: int, count: int
-) -> None:
-    """Re-applies each of `old_ranges` (already unmerged, and the sheet already
-    inserted/deleted) at its shifted position. See apply_structural_edit's own comment for
-    why unmerging has to happen *before* the structural edit, not after."""
-    is_row_op = operation in ("insert_row", "remove_row")
-    is_insert = operation in ("insert_row", "insert_col")
-    deleted_to = start_index + count - 1
-
-    def shift(bound: int) -> int:
-        if is_insert:
-            return bound + count if bound >= start_index else bound
-        return _shift_bound_after_deletion(bound, start_index, deleted_to, count)
-
-    for coord in old_ranges:
-        min_col, min_row, max_col, max_row = range_boundaries(coord)
-        if is_row_op:
-            min_row, max_row = shift(min_row), shift(max_row)
-        else:
-            min_col, max_col = shift(min_col), shift(max_col)
-
-        if min_row == max_row and min_col == max_col:
-            continue  # collapsed to a single cell by a deletion — nothing left to merge
-        ws.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
 
 
 def _remap_filter_criteria_columns(node: dict, remap: Callable[[int], int | None]) -> dict:
@@ -321,7 +363,7 @@ def _remap_filter_criteria_columns(node: dict, remap: Callable[[int], int | None
 
 
 def _shift_relationships_for_structural_edit(
-    db: Session, *, parent_worksheet_id: uuid.UUID, operation: str, start_index: int, count: int
+    db: Session, *, parent_worksheet_id: str, operation: str, start_index: int, count: int
 ) -> None:
     """Keeps every child-sheet relationship's stored positions in sync with a structural edit
     to its parent — otherwise selected_columns/header rows would silently keep pointing at

@@ -210,11 +210,11 @@ def save_workbook_preserving_formula_cache(
 
     `skip_sheets` — sheet names to never restore cache for at all, coordinate-by-coordinate
     exclusion isn't good enough for these. A structural edit (insert/delete row or column,
-    see worksheet_service.apply_structural_edit) shifts *every* cell's coordinate on the
-    edited sheet — reapplying an old cached value at "the same coordinate" would attach a
-    stale, wrong result to whatever formula shifted into that slot instead. Every other
-    sheet in the workbook is untouched by a structural edit to just one sheet, so their own
-    formula caches are still perfectly safe to restore normally.
+    see worksheet_service.apply_edits' full_replace path) recreates the edited sheet from
+    Univer's own post-shift snapshot — the old file's cached values, keyed by pre-shift
+    coordinate, would attach a stale, wrong result to whatever formula now sits at that slot
+    instead. Every other sheet in the workbook is untouched by a structural edit to just one
+    sheet, so their own formula caches are still perfectly safe to restore normally.
 
     The pre-edit snapshot this needs comes from `_read_cached_formula_values()`, a raw-XML
     scan of the *old* on-disk file — not a second `load_workbook(data_only=True)` parse. That
@@ -260,6 +260,12 @@ def save_workbook_preserving_formula_cache(
                 "stale or blank value until the file is next recalculated.",
                 path,
             )
+
+    # Hands this now-saved workbook to the write cache for the *next* write to this same file
+    # to reuse — see that cache's own module comment for why a single user action can trigger
+    # several of these in a row. Safe to do unconditionally here: reaching this line means the
+    # save already succeeded.
+    _update_write_cache(path, workbook)
 
 
 def _read_cached_formula_values(
@@ -518,3 +524,76 @@ def load_workbook_cached(path: Path, *, data_only: bool = False) -> OpenpyxlWork
         _load_locks.pop(key, None)
 
     return loaded
+
+
+# --- Write-path cache -------------------------------------------------------
+#
+# Every write endpoint (apply_edits — including its full_replace path for structural edits,
+# create_worksheet, delete_worksheet, create_child_sheet, sync_child_sheet) does a full
+# load-mutate-save cycle —
+# and a single user action can trigger *several* of these back to back, not as retries but as
+# genuinely separate saves: a structural edit to one sheet correctly makes Univer recalculate
+# every other sheet whose formulas reference it, and each of those fires its own autosave.
+# Confirmed live against a real cross-referenced workbook: inserting one column cascaded into
+# 3+ separate full-workbook reload-and-save cycles, each independently paying the same
+# multi-second reload cost documented on the read-side cache above, one after another —
+# measured, this is what "saving takes forever" after a structural edit actually was.
+#
+# This cache lets the second (and any later) write in such a cascade skip its own reload
+# entirely, by reusing the *previous* write's own already-loaded, already-mutated Workbook
+# object — as long as nothing else has touched the file since (checked via mtime, so any other
+# writer touching the file naturally invalidates this the same way the read cache's own mtime
+# keying does). Safe without any extra locking, unlike the read cache: every write path already
+# holds workbook_write_lock(path) for its *entire* load-mutate-save cycle, so there is never a
+# moment where two writers could read or mutate this cached object concurrently — and unlike
+# the read cache, this one is never handed to a reader, so there's no "shared object a reader
+# might see mid-mutation" risk either. Small and short-lived on purpose: this isn't a general-
+# purpose cache, just enough depth to cover a cascade of saves landing within one request
+# window, not to keep every recently-written file's workbook around indefinitely.
+_WRITE_CACHE_MAX_ENTRIES = 4
+_write_workbook_cache: "OrderedDict[str, tuple[float, OpenpyxlWorkbook]]" = OrderedDict()
+
+
+def load_workbook_for_write(path: Path) -> OpenpyxlWorkbook:
+    """Like load_workbook(path, data_only=False), but reuses the previous write's own
+    in-memory Workbook object when nothing has changed the file since — see the write-cache's
+    own module comment above.
+
+    The caller must be holding workbook_write_lock(path) for the whole load-mutate-save cycle
+    (already required for a plain load_workbook() call here) and must pass this same object to
+    save_workbook_preserving_formula_cache() on success rather than closing it itself — that
+    call is what hands it back to the cache. On failure, the caller must call
+    discard_write_cache(path) instead of (or in addition to) closing it, so a later write never
+    builds on a partially-mutated object left behind by a failed one.
+    """
+    ensure_local(path)
+    key = str(path)
+    current_mtime = path.stat().st_mtime
+    cached = _write_workbook_cache.get(key)
+    if cached is not None and cached[0] == current_mtime:
+        _write_workbook_cache.move_to_end(key)
+        return cached[1]
+    return load_workbook(path, data_only=False)
+
+
+def _update_write_cache(path: Path, workbook: OpenpyxlWorkbook) -> None:
+    key = str(path)
+    old = _write_workbook_cache.get(key)
+    if old is not None and old[1] is not workbook:
+        old[1].close()
+    _write_workbook_cache[key] = (path.stat().st_mtime, workbook)
+    _write_workbook_cache.move_to_end(key)
+    while len(_write_workbook_cache) > _WRITE_CACHE_MAX_ENTRIES:
+        _, (_, evicted) = _write_workbook_cache.popitem(last=False)
+        evicted.close()
+
+
+def discard_write_cache(path: Path) -> None:
+    """Invalidates (and closes) whatever's write-cached for this file — call this when a write
+    fails partway through the load-mutate-save cycle, since the cached object may be left in an
+    inconsistent, partially-mutated state that a later reuse must never build on. The next
+    write for this file just reloads fresh instead: a small, safe fallback cost paid only in
+    the failure case."""
+    cached = _write_workbook_cache.pop(str(path), None)
+    if cached is not None:
+        cached[1].close()

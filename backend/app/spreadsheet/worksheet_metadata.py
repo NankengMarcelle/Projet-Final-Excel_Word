@@ -58,12 +58,22 @@ _CELL_IS_OPERATORS = {
 
 
 def apply_worksheet_metadata(ws: OpenpyxlWorksheet, metadata: WorksheetMetadataUpdate) -> None:
+    _apply_name(ws, metadata.name)
     _apply_merges(ws, metadata.merges)
     _apply_freeze(ws, metadata.freeze)
     _apply_column_row_sizing(ws, metadata)
     _apply_conditional_formatting(ws, metadata.conditional_formats)
     _apply_data_validation(ws, metadata.data_validations)
     _apply_autofilter(ws, metadata.autofilter)
+
+
+def _apply_name(ws: OpenpyxlWorksheet, name: str | None) -> None:
+    # None means "not sent" (see WorksheetMetadataUpdate.name's own docstring) — never touch
+    # the sheet's title in that case. An empty string is also not a real rename request (no
+    # sheet name Univer could legitimately produce is blank); openpyxl would happily write it
+    # and silently corrupt the file's sheet list, so it's treated the same as "not sent".
+    if name and name != ws.title:
+        ws.title = name
 
 
 def _apply_merges(ws: OpenpyxlWorksheet, merges: list[str]) -> None:
@@ -178,6 +188,7 @@ def read_worksheet_metadata(ws: OpenpyxlWorksheet) -> WorksheetMetadataUpdate:
         autofilter = AutofilterState(range=ws.auto_filter.ref, columns=columns)
 
     return WorksheetMetadataUpdate(
+        name=ws.title,
         merges=[str(cell_range) for cell_range in ws.merged_cells.ranges],
         freeze=ws.freeze_panes,
         column_widths=column_widths,

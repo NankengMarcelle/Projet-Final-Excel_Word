@@ -12,8 +12,9 @@ class Conversion(Base):
     __tablename__ = "conversions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    worksheet_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True
+    # String, not UUID — matches worksheets.id (see that model's own comment on why).
+    worksheet_id: Mapped[str] = mapped_column(
+        String, ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     requested_by_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
