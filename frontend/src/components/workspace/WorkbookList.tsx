@@ -35,7 +35,16 @@ function groupByRecency(workbooks: WorkbookRead[]): { group: RecencyGroup; items
     .map(([group, items]) => ({ group, items }));
 }
 
-export function WorkbookList({ searchQuery }: { searchQuery: string }) {
+export function WorkbookList({
+  searchQuery,
+  limit,
+}: {
+  searchQuery: string;
+  // When set, only the first `limit` matching workbooks are rendered — used on the Workspace
+  // home page, which shows a handful of recent files plus a link to the full list, not the
+  // full list itself (see WorkspacePage.tsx and the new AllWorkbooksPage.tsx).
+  limit?: number;
+}) {
   const { lang } = useLang();
   const t = copy[lang];
   const GROUP_LABELS: Record<RecencyGroup, string> = {
@@ -59,7 +68,11 @@ export function WorkbookList({ searchQuery }: { searchQuery: string }) {
     return query ? workbooks.filter((wb) => wb.filename.toLowerCase().includes(query)) : workbooks;
   }, [workbooks, searchQuery]);
 
-  const groups = useMemo(() => groupByRecency(filtered), [filtered]);
+  // Sliced before grouping (not after) so a group never gets cut off mid-way through in a
+  // confusing spot — the API already returns workbooks newest-first, so this keeps exactly the
+  // most recent `limit` files, same as if the list had simply stopped there.
+  const visible = limit ? filtered.slice(0, limit) : filtered;
+  const groups = useMemo(() => groupByRecency(visible), [visible]);
 
   if (isLoading) return <LoadingState message={t.loadingWorkbooks} />;
   if (error) return <p role="alert" className="workspace-status">{t.failedToLoadWorkbooks}</p>;
@@ -85,7 +98,8 @@ export function WorkbookList({ searchQuery }: { searchQuery: string }) {
       <div className="workbook-columns">
         <span>{t.colName}</span>
         <span>{t.colSize}</span>
-        <span>{t.colImported}</span>
+        <span>{t.colDate}</span>
+        <span>{t.colTime}</span>
         <span />
       </div>
       {groups.map(({ group, items }) => (

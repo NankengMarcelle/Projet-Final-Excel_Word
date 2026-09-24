@@ -54,7 +54,6 @@ import "@univerjs/preset-sheets-data-validation/lib/index.css";
 import "@univerjs/preset-sheets-conditional-formatting/lib/index.css";
 
 import { useLang } from "../i18n/useLang";
-import { useTheme } from "../theme/useTheme";
 import { buildWorksheetMetadataUpdate, type RawConditionalFormatRule, type RawDataValidationRule } from "./adapter";
 import type { WorksheetMetadataUpdate } from "../types/worksheet";
 
@@ -245,22 +244,6 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
   ref
 ) {
   const { lang } = useLang();
-  const { theme } = useTheme();
-  // Univer's darkMode is a boolean, but this app's own theme setting has a third option
-  // ("system") that defers to the OS preference — resolve that here rather than passing
-  // "system" through, and keep it live so an OS-level preference change while "system" is
-  // selected is picked up too (matching this app's own [data-theme]-less CSS fallback, which
-  // reacts to the same media query automatically).
-  const [systemPrefersDark, setSystemPrefersDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches);
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, []);
-  const isDarkMode = theme === "dark" || (theme === "system" && systemPrefersDark);
   // A stable *outer* wrapper owned by React — never touched by Univer directly. Each mount of
   // the effect below creates its own plain `container` div and appends it here, rather than
   // handing Univer this ref's own node straight, so that a lang-triggered recreate can swap in
@@ -456,7 +439,6 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
       locale,
       locales: { [locale]: localeData },
       theme: defaultTheme,
-      darkMode: isDarkMode,
       presets: [
         UniverSheetsCorePreset({ container }),
         UniverSheetsFilterPreset(),
@@ -665,11 +647,10 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
       setTimeout(() => univer.dispose(), 0);
     };
     // workbookData is deliberately excluded — see currentSnapshotRef's comment above; only a
-    // lang or resolved-dark-mode change should ever re-run this effect after the initial mount
-    // (same recreate-on-trigger-change pattern as lang, since Univer has no runtime "switch
-    // theme" API either — darkMode is fixed at createUniver() time, just like locale).
+    // lang change should ever re-run this effect after the initial mount (Univer has no runtime
+    // "switch locale" API either — locale is fixed at createUniver() time).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang, isDarkMode]);
+  }, [lang]);
 
   // flexDirection: column so the appended container's own `flex: 1` (set in the effect above)
   // grows it to fill the available height, the same role `.editor-grid-card` (this component's

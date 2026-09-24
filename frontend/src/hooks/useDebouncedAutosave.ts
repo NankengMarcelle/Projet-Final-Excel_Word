@@ -38,10 +38,24 @@ export function useDebouncedAutosave(
     Object.fromEntries(initialWorksheets.map((s) => [s.id, extractCellValues(s)]))
   );
   const pendingRef = useRef<Record<string, CellSnapshotMap>>({});
-  // Worksheet ids whose sheet-level metadata (not cell values) changed since their last save —
-  // set by handleChange when a ChangedWorksheetsSnapshot arrives with metadataDirty: true. A
-  // sheet in here still needs saving even if its cell-value diff comes out empty.
-  const metadataDirtyRef = useRef<Set<string>>(new Set());
+  // Per-sheet monotonic counters, not a plain dirty/clean Set — bumped by handleChange every
+  // time a ChangedWorksheetsSnapshot with metadataDirty: true arrives for that sheet.
+  // metadataSavedVersionRef tracks the version each sheet's *last successful save* actually
+  // captured. A sheet still needs saving whenever its dirty version is ahead of its saved
+  // version, even if its cell-value diff comes out empty (e.g. a merge/unmerge, freeze, or
+  // row/column resize — metadata-only changes with nothing for diffCellValues to see).
+  //
+  // This distinction matters for a real race, confirmed live: merge A starts a save (metadata
+  // fetched fresh at that moment), merge B happens *while that save is in flight*, then merge
+  // A's save resolves. A plain boolean flag cleared unconditionally on success would wipe out
+  // merge B's own dirty marking too — even though merge B was never actually sent (metadata
+  // was captured before merge B happened) — and the very next flushSheet call for merge B's
+  // queued snapshot would see edits=[] and dirty=false, and silently skip saving it entirely,
+  // despite the UI having already shown "Saved". Comparing versions instead means a save only
+  // ever claims credit for the version it actually captured, not whatever's true by the time
+  // it finishes.
+  const metadataDirtyVersionRef = useRef<Record<string, number>>({});
+  const metadataSavedVersionRef = useRef<Record<string, number>>({});
   const savingIdsRef = useRef<Set<string>>(new Set());
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A worksheet undergoing a structural edit (insert/delete row or column — see
@@ -97,7 +111,10 @@ export function useDebouncedAutosave(
 
       const baseline = lastSavedRef.current[worksheetId] ?? {};
       const edits = diffCellValues(baseline, pending);
-      const metadataChanged = metadataDirtyRef.current.has(worksheetId);
+      // Captured *before* the async save below, not read again after — see this ref's own
+      // comment for why that ordering is exactly what the bug was.
+      const dirtyVersionAtStart = metadataDirtyVersionRef.current[worksheetId] ?? 0;
+      const metadataChanged = dirtyVersionAtStart > (metadataSavedVersionRef.current[worksheetId] ?? 0);
       if (edits.length === 0 && !metadataChanged) {
         if (pendingRef.current[worksheetId] === pending) delete pendingRef.current[worksheetId];
         return true;
@@ -114,7 +131,12 @@ export function useDebouncedAutosave(
         await saveEdits(worksheetId, edits, metadata);
         lastSavedRef.current[worksheetId] = pending;
         if (pendingRef.current[worksheetId] === pending) delete pendingRef.current[worksheetId];
-        metadataDirtyRef.current.delete(worksheetId);
+        // Only advances to the version *this* save actually captured — if a newer metadata
+        // change bumped metadataDirtyVersionRef while the request above was in flight, that
+        // higher version is left untouched, so the very next flushSheet call (triggered below,
+        // since something newer is now pending) still sees metadataChanged: true instead of
+        // the flag having been wiped out from under it.
+        metadataSavedVersionRef.current[worksheetId] = dirtyVersionAtStart;
         savingIdsRef.current.delete(worksheetId);
         updateAggregateStatus();
         // Only retry-immediately here, on the *success* path: a newer snapshot queued while
@@ -165,7 +187,9 @@ export function useDebouncedAutosave(
         if (!sheet.id || !(sheet.id in lastSavedRef.current)) continue;
         if (structuralInFlightRef.current.has(sheet.id)) continue;
         pendingRef.current[sheet.id] = extractCellValues(sheet as IWorksheetData, changed.styles);
-        if (changed.metadataDirty) metadataDirtyRef.current.add(sheet.id);
+        if (changed.metadataDirty) {
+          metadataDirtyVersionRef.current[sheet.id] = (metadataDirtyVersionRef.current[sheet.id] ?? 0) + 1;
+        }
       }
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {

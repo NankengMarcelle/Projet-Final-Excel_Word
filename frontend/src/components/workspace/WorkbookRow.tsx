@@ -32,13 +32,27 @@ function localeFor(lang: Lang): string {
   return lang === "fr" ? "fr-FR" : "en-US";
 }
 
-function formatDate(iso: string, lang: Lang): string {
-  const date = new Date(iso);
-  const isToday = date.toDateString() === new Date().toDateString();
-  const locale = localeFor(lang);
-  return isToday
-    ? date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })
-    : date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+// Day and time are shown separately now (two lines) instead of one-or-the-other depending on
+// recency — the grouping header ("Aujourd'hui") already tells you a row is from today, but the
+// row itself used to go silent on the actual date once it did, which meant checking exactly
+// *when* today a file was touched (vs. just "today") always needed a second click into it.
+function formatDay(iso: string, lang: Lang): string {
+  return new Date(iso).toLocaleDateString(localeFor(lang), { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatTime(iso: string, lang: Lang): string {
+  return new Date(iso).toLocaleTimeString(localeFor(lang), { hour: "numeric", minute: "2-digit" });
+}
+
+// A long real filename (this app's own test data routinely runs 60-90 characters) would
+// otherwise depend entirely on the column's CSS ellipsis to stay readable — fine most of the
+// time, but it means the row's rendered width is at the mercy of whatever the container happens
+// to be, and a DOM inspection or a screen reader still gets the full, untruncated string. Trimming
+// the actual text keeps every row's name predictable regardless of layout.
+const MAX_NAME_LENGTH = 46;
+
+function truncateName(name: string): string {
+  return name.length > MAX_NAME_LENGTH ? `${name.slice(0, MAX_NAME_LENGTH - 1)}…` : name;
 }
 
 export function WorkbookRow({ workbook }: { workbook: WorkbookRead }) {
@@ -127,11 +141,12 @@ export function WorkbookRow({ workbook }: { workbook: WorkbookRead }) {
             }}
           />
         ) : (
-          <span>{workbook.filename}</span>
+          <span title={workbook.filename}>{truncateName(workbook.filename)}</span>
         )}
       </div>
       <span className="workbook-row-size">{formatBytes(workbook.file_size_bytes)}</span>
-      <span className="workbook-row-date">{formatDate(workbook.created_at, lang)}</span>
+      <span className="workbook-row-date">{formatDay(workbook.created_at, lang)}</span>
+      <span className="workbook-row-time">{formatTime(workbook.created_at, lang)}</span>
 
       <div ref={menuRef} style={{ position: "relative" }}>
         <button

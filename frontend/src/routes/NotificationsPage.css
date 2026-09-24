@@ -1,0 +1,76 @@
+/* Same shell/header setup as WorkspacePage.css/WordFilesPage.css (shared AppShell). */
+
+.notifications-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+  box-sizing: border-box;
+}
+
+.notifications-heading-section {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.notifications-heading {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-h);
+  margin: 0 0 6px;
+  letter-spacing: -0.3px;
+}
+
+.notifications-subtitle {
+  font-size: 14.5px;
+  color: var(--text);
+  margin: 0;
+}
+
+.notifications-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.notifications-action-btn {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-h);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+.notifications-action-btn:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+.notifications-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Flat, not boxed — matching WordFilesPage's own list treatment (and the workspace list's own
+   "no card chrome" rule established earlier): the list sits directly on the page, each row's own
+   hover/unread state is the only visual separation it needs. */
+.notifications-list-section .notification-list-item {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.notifications-list-section .notification-list-item:last-child {
+  border-bottom: none;
+}
+
+.notifications-list-section .notification-list-item-message {
+  font-size: 14px;
+}

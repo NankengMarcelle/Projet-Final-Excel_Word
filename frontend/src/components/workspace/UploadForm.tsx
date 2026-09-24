@@ -6,26 +6,31 @@ import { UploadCloudIcon } from "../icons/WorkspaceIcons";
 import { SpinnerIcon } from "../icons/EditorIcons";
 import { copy } from "../../i18n/copy";
 import { useLang } from "../../i18n/useLang";
+import { useToast } from "../common/NotificationContext";
 
 export function UploadForm() {
   const { lang } = useLang();
   const t = copy[lang];
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const mutation = useMutation({
     mutationFn: importWorkbook,
-    onSuccess: () => {
+    onSuccess: (workbook) => {
       setError(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
       void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+      showToast(t.uploadSuccessToast(workbook.filename), "success");
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? String(err.detail) : t.uploadFailed);
+      const message = err instanceof ApiError ? String(err.detail) : t.uploadFailed;
+      setError(message);
+      showToast(message, "error");
     },
   });
 

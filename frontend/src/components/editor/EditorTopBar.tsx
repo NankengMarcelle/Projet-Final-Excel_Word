@@ -7,7 +7,6 @@ import { ArrowLeftIcon, ChevronIcon, PlusIcon, SaveIcon, WordDocIcon } from "../
 import { SpreadsheetFileIcon } from "../icons/WorkspaceIcons";
 import { GearIcon } from "../icons/SettingsIcons";
 import { SettingsModal } from "../settings/SettingsModal";
-import { ConvertToWordModal } from "../conversion/ConvertToWordModal";
 import { SaveStatusIndicator } from "./SaveStatusIndicator";
 import { ChildSheetSyncPanel } from "../sync/ChildSheetSyncPanel";
 import type { ComputedCellValue } from "../../univer/UniverSheetGrid";
@@ -25,6 +24,7 @@ interface EditorTopBarProps {
   onCreateChildSheet: () => void;
   onChildSheetSynced: () => void;
   onToggleCollapsed: () => void;
+  onConvertToWord: () => void;
   getComputedValues: (worksheetId: string) => Promise<ComputedCellValue[]>;
 }
 
@@ -32,8 +32,8 @@ interface EditorTopBarProps {
 // action buttons, mirroring Excel's own title bar), workbook-level actions (Create Child Sheet,
 // Convert to Word) pushed to the right, Settings and the collapse toggle at the far end. Convert
 // to Word used to be an always-visible "label + dropdown + button" strip; it's now a single
-// button that opens ConvertToWordModal, where the sheet picker only exists while actually
-// converting something.
+// button that opens a docked ConvertToWordPanel (see EditorPage), where the sheet picker only
+// exists while actually converting something.
 export function EditorTopBar({
   workbookId,
   filename,
@@ -44,6 +44,7 @@ export function EditorTopBar({
   onCreateChildSheet,
   onChildSheetSynced,
   onToggleCollapsed,
+  onConvertToWord,
   getComputedValues,
 }: EditorTopBarProps) {
   const { lang } = useLang();
@@ -52,7 +53,6 @@ export function EditorTopBar({
   const [isRenaming, setIsRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(filename);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isConvertOpen, setIsConvertOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // The workbook query can refetch/rename from elsewhere (e.g. this same rename, or a future
@@ -136,7 +136,7 @@ export function EditorTopBar({
         getComputedValues={getComputedValues}
       />
       {worksheets.length > 0 && (
-        <button type="button" className="editor-action-btn small" onClick={() => setIsConvertOpen(true)}>
+        <button type="button" className="editor-action-btn small" onClick={onConvertToWord}>
           <WordDocIcon /> {t.convertLabel}
         </button>
       )}
@@ -162,13 +162,6 @@ export function EditorTopBar({
       </button>
 
       {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
-      {isConvertOpen && (
-        <ConvertToWordModal
-          worksheets={worksheets}
-          onClose={() => setIsConvertOpen(false)}
-          getComputedValues={getComputedValues}
-        />
-      )}
     </div>
   );
 }

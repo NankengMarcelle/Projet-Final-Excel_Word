@@ -28,7 +28,7 @@ export function createEmptySourceFormState(defaultParentWorksheetId: string): So
 }
 
 // One contributing sheet's config form — parent-sheet select, header range, column picker,
-// filter editor. Rendered once per source in ChildSheetModal (create: N sections building up
+// filter editor. Rendered once per source in ChildSheetPanel (create: N sections building up
 // one request) — fully controlled, no internal state of its own, so the parent form owns
 // everything and can validate across sections (e.g. matching column counts) before submitting.
 export function ChildSheetSourceSection({

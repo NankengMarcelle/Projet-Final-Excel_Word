@@ -34,11 +34,10 @@ export const copy = {
     registerFailed: "Échec de l'inscription",
 
     // Sidebar
-    navWorkbooks: "Fichiers Excel & Propriétés",
+    navWorkbooks: "Accueil",
     navWordFiles: "Fichiers Word (Convertis)",
     navNotifications: "Notifications",
     navAdmin: "Administration",
-    comingSoon: "Bientôt disponible",
     logOut: "Déconnexion",
     collapseSidebar: "Réduire",
     expandSidebar: "Agrandir",
@@ -48,8 +47,15 @@ export const copy = {
     anticWorker: "Agent ANTIC",
     settings: "Paramètres",
 
+    // Notifications (bell dropdown + full page)
+    notificationsSubtitle: "Historique des confirmations de vos actions récentes.",
+    notificationsEmpty: "Aucune notification pour l'instant.",
+    markAllReadLabel: "Tout marquer comme lu",
+    clearAllLabel: "Tout effacer",
+    viewAllNotificationsLabel: "Voir toutes les notifications",
+
     // Workspace greeting
-    workspaceGreeting: (name: string) => `Bonjour, ${name}.`,
+    workspaceGreeting: (name: string) => `Bienvenue, ${name}.`,
     workspaceSubtitle: "Gérez vos classeurs et générez des rapports Word institutionnels en toute simplicité.",
 
     // Workspace: upload + workbook list
@@ -58,9 +64,11 @@ export const copy = {
     uploading: "Téléversement...",
     uploadWorkbookLabel: "Téléverser un classeur",
     uploadFailed: "Échec du téléversement",
+    uploadSuccessToast: (filename: string) => `"${filename}" téléversé avec succès.`,
     colName: "Nom",
     colSize: "Taille",
-    colImported: "Importé",
+    colDate: "Date",
+    colTime: "Heure",
     groupToday: "Aujourd'hui",
     groupPrevious7Days: "7 derniers jours",
     groupEarlier: "Plus ancien",
@@ -69,6 +77,9 @@ export const copy = {
     failedToLoadWorkbooks: "Échec du chargement des classeurs.",
     noWorkbooksYet: "Aucun classeur pour l'instant — téléversez-en un ci-dessus pour commencer.",
     noWorkbooksMatch: (query: string) => `Aucun classeur ne correspond à « ${query} ».`,
+    seeMoreWorkbooks: "Voir tous les classeurs",
+    allWorkbooksTitle: "Tous les classeurs",
+    backToWorkspaceLink: "Retour",
     workbookActions: "Actions sur le classeur",
     openAction: "Ouvrir",
     renameAction: "Renommer",
@@ -98,12 +109,6 @@ export const copy = {
     statusInactive: "Inactif",
     roleAdmin: "Administrateur",
     roleUser: "Utilisateur",
-
-    // Editor footer status bar
-    editorFooterCopyright: "© 2026 ANTIC — Plateforme Excel-to-Word",
-    editorReady: "Prêt",
-    editorActiveSheet: (name: string, rows: number, cols: number) =>
-      `Feuille active : ${name} (${rows} Lignes x ${cols} Colonnes)`,
 
     // Editor top bar
     backToWorkspace: "Retour à l'espace de travail",
@@ -147,6 +152,8 @@ export const copy = {
     downloadFileLabel: (filename: string) => `Télécharger ${filename}`,
     downloadedNote: "Téléchargé — reconvertissez pour obtenir une nouvelle copie.",
     conversionFailedError: "Échec de la conversion",
+    conversionReadyToast: "Document Word prêt à télécharger.",
+    fileDownloadedToast: (filename: string) => `"${filename}" téléchargé.`,
 
     // Create child sheet modal
     createChildSheetTitle: "Créer une feuille enfant",
@@ -156,6 +163,7 @@ export const copy = {
     headerRowRangeError: "La ligne de fin d'en-tête doit être supérieure ou égale à la ligne de début",
     selectAtLeastOneColumnError: "Sélectionnez au moins une colonne pour chaque feuille",
     createChildSheetFailedError: "Échec de la création de la feuille enfant",
+    childSheetCreatedToast: (name: string) => `Feuille enfant "${name}" créée.`,
 
     // Child sheet source section
     parentSheetLabel: "Feuille parente",
@@ -212,11 +220,10 @@ export const copy = {
     loginFailed: "Login failed",
     registerFailed: "Registration failed",
 
-    navWorkbooks: "Excel Files & Properties",
-    navWordFiles: "Word Documents (Converted)",
+    navWorkbooks: "Home",
+    navWordFiles: "Word Documents",
     navNotifications: "Notifications",
     navAdmin: "Admin",
-    comingSoon: "Coming soon",
     logOut: "Log Out",
     collapseSidebar: "Collapse",
     expandSidebar: "Expand",
@@ -225,8 +232,15 @@ export const copy = {
     anticWorker: "ANTIC Agent",
     settings: "Settings",
 
+    // Notifications (bell dropdown + full page)
+    notificationsSubtitle: "A history of confirmations from your recent actions.",
+    notificationsEmpty: "No notifications yet.",
+    markAllReadLabel: "Mark all as read",
+    clearAllLabel: "Clear all",
+    viewAllNotificationsLabel: "View all notifications",
+
     // Workspace greeting
-    workspaceGreeting: (name: string) => `Hello, ${name}.`,
+    workspaceGreeting: (name: string) => `Welcome, ${name}.`,
     workspaceSubtitle: "Manage your workbooks and generate institutional Word reports with ease.",
 
     // Workspace: upload + workbook list
@@ -235,9 +249,11 @@ export const copy = {
     uploading: "Uploading...",
     uploadWorkbookLabel: "Upload workbook",
     uploadFailed: "Upload failed",
+    uploadSuccessToast: (filename: string) => `"${filename}" uploaded successfully.`,
     colName: "Name",
     colSize: "Size",
-    colImported: "Imported",
+    colDate: "Date",
+    colTime: "Time",
     groupToday: "Today",
     groupPrevious7Days: "Previous 7 days",
     groupEarlier: "Earlier",
@@ -246,6 +262,9 @@ export const copy = {
     failedToLoadWorkbooks: "Failed to load workbooks.",
     noWorkbooksYet: "No workbooks yet — upload one above to get started.",
     noWorkbooksMatch: (query: string) => `No workbooks match "${query}".`,
+    seeMoreWorkbooks: "See all workbooks",
+    allWorkbooksTitle: "All workbooks",
+    backToWorkspaceLink: "Back",
     workbookActions: "Workbook actions",
     openAction: "Open",
     renameAction: "Rename",
@@ -275,12 +294,6 @@ export const copy = {
     statusInactive: "Inactive",
     roleAdmin: "Admin",
     roleUser: "User",
-
-    // Editor footer status bar
-    editorFooterCopyright: "© 2026 ANTIC — Excel-to-Word Platform",
-    editorReady: "Ready",
-    editorActiveSheet: (name: string, rows: number, cols: number) =>
-      `Active sheet: ${name} (${rows} Rows x ${cols} Columns)`,
 
     // Editor top bar
     backToWorkspace: "Back to workspace",
@@ -324,6 +337,8 @@ export const copy = {
     downloadFileLabel: (filename: string) => `Download ${filename}`,
     downloadedNote: "Downloaded — convert again for a new copy.",
     conversionFailedError: "Conversion failed",
+    conversionReadyToast: "Word document ready to download.",
+    fileDownloadedToast: (filename: string) => `"${filename}" downloaded.`,
 
     // Create child sheet modal
     createChildSheetTitle: "Create child sheet",
@@ -333,6 +348,7 @@ export const copy = {
     headerRowRangeError: "Header end row must be greater than or equal to header start row",
     selectAtLeastOneColumnError: "Select at least one column for every sheet",
     createChildSheetFailedError: "Failed to create child sheet",
+    childSheetCreatedToast: (name: string) => `Child sheet "${name}" created.`,
 
     // Child sheet source section
     parentSheetLabel: "Parent sheet",

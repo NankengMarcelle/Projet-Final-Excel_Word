@@ -34,7 +34,9 @@ export function AppShell() {
   // `user` to load before rendering their Outlet.
   if (!user) return null;
 
-  const isWorkspace = location.pathname === "/workspace";
+  // /workspace/all (the full, uncapped workbook list — see AllWorkbooksPage.tsx) is the same
+  // search surface as /workspace itself, just without the recent-files cap.
+  const isWorkspace = location.pathname === "/workspace" || location.pathname === "/workspace/all";
 
   return (
     <div className="shell">

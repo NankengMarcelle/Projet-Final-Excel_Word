@@ -6,14 +6,19 @@
 .workspace-main {
   flex: 1;
   width: 100%;
-  /* Was a flat 1040px — on a large/wide monitor the header above (full-width) made this cap
-     read as broken/unresponsive rather than intentional: a big empty gutter on both sides while
-     the workbook table's Name column (already `1fr`, see .workbook-row below) sat artificially
-     narrow. 1440px keeps line-length sane on ultra-wide displays without capping so early that
-     it looks like the page ignored the available space on an ordinary 1920px screen. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Content stays line-length-sane on an ultra-wide monitor without capping the *background*
+   too — each section below (.workspace-header-section / .workspace-list-section) is full-bleed
+   across the whole page, and this wrapper only constrains what sits inside it. Was a flat
+   1040px; 1440px avoids that reading as broken/unresponsive on an ordinary 1920px screen. */
+.workspace-inner {
   max-width: 1440px;
   margin: 0 auto;
-  padding: 32px 24px 60px;
+  width: 100%;
+  padding: 0 24px;
   box-sizing: border-box;
 }
 
@@ -24,64 +29,116 @@
   margin: 0 0 16px;
 }
 
-/* ---- Greeting ---- */
+/* ---- Two flat, full-bleed zones, not floating cards — the same structure Google Sheets' own
+   home uses: a section on the page's own gray canvas (header + start-a-workbook), then a
+   section that switches to a plain lighter background (the file list) for the rest of the
+   page. No border, no shadow, no rounded box anywhere here — the two-tone color change itself
+   is the only separator, exactly like Sheets' own boundary between its template row and its
+   file list. Each section carries its own .workspace-inner for the actual content width; the
+   background spans the section's full width, edge to edge. */
 
-.workspace-greeting {
-  margin-bottom: 32px;
+.workspace-header-section {
+  padding: 32px 0 28px;
 }
 
-.workspace-greeting-heading {
-  font-size: 28px;
-  font-weight: 800;
+.workspace-greeting-line {
+  font-size: 25px;
+  font-weight: 700;
   color: var(--text-h);
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   letter-spacing: -0.3px;
 }
 
-.workspace-greeting-subtitle {
+/* The one-line explanation of what this platform actually does — a first-time visitor landing
+   straight on "Welcome, X." with no other context (no marketing site, no onboarding flow) had
+   nothing telling them what to do next or why. Sized and colored to read as a caption under the
+   greeting, not a second headline. No max-width here — .workspace-inner (1440px cap) is already
+   the real width limit; an extra, tighter cap on top of that just wrapped this one sentence
+   awkwardly onto two lines with visible empty space still to its right. */
+.workspace-subtitle {
   font-size: 14.5px;
+  color: var(--text);
+  margin: 0 0 20px;
+}
+
+.workspace-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.workspace-upload-title {
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text);
   margin: 0;
 }
 
-/* ---- Upload bar: full-width, matching the workbook list below rather than a small
-   fixed-width card stranded on one side of the page. ---- */
-
-.start-cards {
-  margin-bottom: 32px;
+.workspace-list-section {
+  background: var(--surface);
+  flex: 1;
+  padding-bottom: 40px;
 }
 
+.workspace-list-section .workspace-inner {
+  padding-top: 24px;
+}
+
+.workspace-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.workspace-list-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin: 0;
+  letter-spacing: -0.2px;
+}
+
+/* ---- Upload control: a compact inline button, not a hero dropzone — uploading a new workbook
+   happens far less often than opening an existing one, so it no longer claims the page's most
+   prominent real estate. Still a full drag-and-drop target (see UploadForm.tsx), just sized to
+   match an ordinary secondary action. ---- */
+
 .upload-card {
-  width: 100%;
+  position: relative;
+  flex-shrink: 0;
 }
 
 .upload-card-preview {
-  width: 100%;
-  height: 64px;
-  border: 1.5px dashed var(--border);
-  border-radius: 10px;
+  height: 36px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-pill);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--text-h);
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 8px;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
-  padding: 0;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  padding: 0 14px;
   box-sizing: border-box;
+  white-space: nowrap;
 }
 
 .upload-card-preview svg {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
+  color: var(--accent);
 }
 
 .upload-card-preview:hover,
 .upload-card-preview.dragging {
   border-color: var(--accent);
   background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .upload-card-preview:disabled {
@@ -92,18 +149,55 @@
 .upload-card-label {
   font-size: 13.5px;
   font-weight: 500;
-  color: var(--text-h);
 }
 
 .upload-card input[type="file"] {
   display: none;
 }
 
+/* Positioned so a failed upload doesn't shove the list-header row's title/button apart —
+   right-aligned under the button it belongs to instead. */
 .upload-card-error {
+  position: absolute;
+  top: 100%;
+  right: 0;
   margin: 6px 0 0;
+  width: max-content;
+  max-width: 260px;
   font-size: 12.5px;
   color: var(--danger);
+  text-align: right;
+}
+
+.workspace-see-more {
+  display: block;
   text-align: center;
+  padding: 14px;
+  margin-top: 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  border-top: 1px solid var(--border);
+}
+
+.workspace-see-more:hover {
+  background: var(--code-bg);
+}
+
+.workspace-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.workspace-back-link:hover {
+  color: var(--accent);
 }
 
 /* ---- Workbook list ---- */
@@ -123,7 +217,7 @@
 .workbook-columns,
 .workbook-row {
   display: grid;
-  grid-template-columns: 1fr 100px 150px 40px;
+  grid-template-columns: 1fr 90px 100px 90px 40px;
   align-items: center;
   gap: 12px;
 }
@@ -135,25 +229,29 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Sentence case, not shouted uppercase-tracked — a quieter section label, closer to how a
+   calm, dense file list (Google Sheets' own "Today"/"Previous 30 days" grouping) treats these:
+   informative, not a banner. */
 .workbook-group-label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   padding: 18px 16px 6px;
 }
 
 .workbook-row {
-  padding: 9px 16px;
-  border-radius: 8px;
+  padding: 11px 16px;
   cursor: pointer;
   position: relative;
+  /* A hairline under every row, matching Google Sheets' own dense list — the visual separator
+     that was previously missing between adjacent rows (only the header row had one). */
+  border-bottom: 1px solid var(--border);
 }
 
+/* Flat, not lifted — a plain background shift with no shadow, matching how a dense operational
+   file list signals "hovered" without it reading as a raised card. */
 .workbook-row:hover {
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background: var(--code-bg);
 }
 
 .workbook-row-name {
@@ -177,8 +275,13 @@
   font-size: 14px;
 }
 
+/* Date and time are genuinely separate grid columns, each with its own header (Date/Heure) —
+   not stacked lines under one "Imported" header — so they read as two distinct facts, not one
+   combined timestamp with a caption. See WorkbookRow.tsx's own comment on why both are always
+   shown regardless of recency. */
 .workbook-row-size,
-.workbook-row-date {
+.workbook-row-date,
+.workbook-row-time {
   font-size: 13px;
   color: var(--text);
 }
@@ -196,6 +299,10 @@
   color: var(--text-h);
 }
 
+/* Always visible, not hover-only — Google Sheets' own list never hides its row menu either;
+   hover-reveal saves a little visual noise but costs discoverability (there's nothing to hint a
+   menu exists until the pointer happens to land on the right row) and breaks down entirely on
+   touch, where "hover" never fires at all. */
 .workbook-row-menu-btn {
   justify-self: end;
   width: 30px;
@@ -208,13 +315,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.1s ease, background-color 0.1s ease;
-}
-
-.workbook-row:hover .workbook-row-menu-btn,
-.workbook-row-menu-btn.open {
-  opacity: 1;
+  transition: background-color 0.1s ease;
 }
 
 .workbook-row-menu-btn:hover {
@@ -277,7 +378,8 @@
   }
   .workbook-columns span:not(:first-child):not(:last-child),
   .workbook-row-size,
-  .workbook-row-date {
+  .workbook-row-date,
+  .workbook-row-time {
     display: none;
   }
 }

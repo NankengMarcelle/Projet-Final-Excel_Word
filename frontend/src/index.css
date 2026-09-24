@@ -1,28 +1,43 @@
 :root {
-  /* SheetFlow palette: blue / white / grey. */
+  /* SheetFlow palette v3: one brand color, not two disconnected ones. The accent used to be a
+     generic blue (#1a56db, then before that stock Tailwind blue-600) with nothing to do with
+     ANTIC, while the sidebar sat right next to it in the app's own real navy (#02006c,
+     AppShell.css) — a UI literally ignoring its own brand color right beside the brand color is
+     exactly the "assembled from a template, not designed as one thing" tell. The accent is now
+     that same navy, so a button, a focus ring, and the sidebar all read as one authored palette. */
   --text: #475467;
   --text-h: #101828;
   --bg: #fff;
   --surface: #fff;
+  /* A light neutral canvas, distinct from --surface (pure white) — used behind a page's chrome
+     so its actual content sits on a white card that visibly stands out from the page around it,
+     the same two-tone effect Google Sheets' own home uses rather than one flat white page. */
+  --canvas: #f4f5f7;
   --border: #e4e7ec;
   --code-bg: #f4f4f4;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-bg: rgba(37, 99, 235, 0.08);
-  --accent-border: rgba(37, 99, 235, 0.5);
-  --danger: #d92d20;
-  --danger-bg: rgba(217, 45, 32, 0.08);
+  --accent: #02006c;
+  --accent-hover: #1e1b8f;
+  --accent-bg: rgba(2, 0, 108, 0.06);
+  --accent-border: rgba(2, 0, 108, 0.4);
+  --danger: #b3261e;
+  --danger-bg: rgba(179, 38, 30, 0.08);
   --social-bg: rgba(244, 244, 244, 0.5);
-  --shadow:
-    rgba(16, 24, 40, 0.1) 0 10px 15px -3px, rgba(16, 24, 40, 0.05) 0 4px 6px -2px;
+  /* A single, soft, navy-tinted shadow — not the unedited Tailwind shadow-lg recipe (two gray
+     layers at rgba(16,24,40,...)) this used to be, which is copy-pasted, not designed: any two
+     apps using Tailwind's defaults untouched share this exact shadow, so it reads as assembled
+     rather than considered. */
+  --shadow: 0 2px 8px rgba(2, 0, 108, 0.08), 0 1px 2px rgba(2, 0, 108, 0.06);
+  /* Pill-shaped, not boxy — the single most visible "considered vs. generic" signal on every
+     button in the app. */
+  --radius-pill: 999px;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --sans: 'Public Sans', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: 'Public Sans', system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
   font: 18px/145% var(--sans);
   letter-spacing: 0.18px;
-  color-scheme: light dark;
+  color-scheme: light;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -35,95 +50,67 @@
   }
 }
 
-/* Three-state theming: bare :root above is the light default. The OS-preference media query
-   below applies dark values automatically, but only when the user hasn't explicitly picked
-   "Light" in Settings (:not([data-theme="light"]) guard) — and an explicit [data-theme="dark"]
-   picked in Settings always wins over both, in either direction. ThemeContext is what sets
-   data-theme on <html> ("light" | "dark" | removed entirely for "system"). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --surface: #1d1f27;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #3b82f6;
-    --accent-hover: #60a5fa;
-    --accent-bg: rgba(59, 130, 246, 0.15);
-    --accent-border: rgba(59, 130, 246, 0.5);
-    --danger: #f97066;
-    --danger-bg: rgba(249, 112, 102, 0.12);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    /* AppShell's sidebar keeps its own navy brand hue (#02006c, the light-mode default) rather
-       than switching to a neutral gray — but at full saturation it visually "pops" against the
-       desaturated --bg/--surface tones around it (reported directly: "looks weird in darkmode").
-       Same hue, muted down to match how saturated the rest of dark mode actually is. */
-    --sidebar-bg: #262a52;
-    --sidebar-hover: #363b73;
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-}
-
-:root[data-theme="dark"] {
-  --text: #9ca3af;
-  --text-h: #f3f4f6;
-  --bg: #16171d;
-  --surface: #1d1f27;
-  --border: #2e303a;
-  --code-bg: #1f2028;
-  --accent: #3b82f6;
-  --accent-hover: #60a5fa;
-  --accent-bg: rgba(59, 130, 246, 0.15);
-  --accent-border: rgba(59, 130, 246, 0.5);
-  --danger: #f97066;
-  --danger-bg: rgba(249, 112, 102, 0.12);
-  --social-bg: rgba(47, 48, 58, 0.5);
-  --sidebar-bg: #262a52;
-  --sidebar-hover: #363b73;
-  --shadow:
-    rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-}
-
-/* Univer (mounted as a plain DOM node — see univer/UniverSheetGrid.tsx) is given its own
-   `darkMode` flag wired to this app's actual [data-theme] setting, and that's enough for its
-   real, coordinated theme (toolbar, grid, font dropdown, cell-reference box) to render
-   correctly in either mode. But Univer's *bundled* CSS also ships some Tailwind `dark:`
-   utility classes that react directly to the OS-level prefers-color-scheme media query,
-   completely independent of the `darkMode` flag it was actually given. Those two mechanisms
-   only ever disagree in one real case — confirmed live: the app's theme explicitly set to
-   Light while the OS/browser itself prefers dark — where Univer's own theme correctly renders
-   light, but those leftover classes still fire as if it were dark, producing invisible
-   white-on-white menu text and a dark cell-reference "Name Box" sitting oddly in an otherwise
-   light toolbar. Scoped to `[data-theme="light"]` specifically — not just the media query
-   alone — so this never fires when the app (and Univer) are actually showing dark, where
-   Univer's own dark background already matches these same classes correctly. Within this
-   scope there's no genuine dark surface anywhere to contrast against, so unlike a real dark
-   theme this doesn't need exceptions — every one of these classes gets neutralized back to
-   its light-mode equivalent, not just re-paired with a matching dark counterpart. */
+/* This app is light-only by design (no theme toggle) — but Univer's *bundled* CSS still ships
+   some Tailwind `dark:` utility classes that react directly to the OS-level
+   prefers-color-scheme media query, completely independent of anything this app controls.
+   Confirmed live: with the OS/browser set to prefer dark, those leftover classes fire as if
+   Univer itself were dark, producing invisible white-on-white menu text and a dark
+   cell-reference "Name Box" sitting oddly in this always-light toolbar. Applied unconditionally
+   whenever the OS prefers dark, since the app itself never has a genuine dark surface to
+   contrast against — every one of these classes gets neutralized back to its light-mode
+   equivalent, not paired with a dark counterpart. */
 @media (prefers-color-scheme: dark) {
   /* Excludes elements that also carry a bare (non dark:-prefixed) univer-bg-gray-700 class —
-     those are tooltip-style bubbles that are *always* a dark bubble with white text by design,
-     in either app theme (their `dark:` variant pair, e.g. on the "Taille de police" hover
-     tooltip, inverts to a light bg + dark text, but that variant is inactive here since
-     Univer's own darkMode is false in light mode) — forcing their text dark here left dark text
-     stranded on their still-dark bubble. */
-  :root[data-theme="light"] [class*="univer-text-white"]:not([class~="univer-bg-gray-700"]) {
+     those are tooltip-style bubbles that are *always* a dark bubble with white text by design
+     (their `dark:` variant pair, e.g. on the "Taille de police" hover tooltip, inverts to a
+     light bg + dark text, but that variant is inactive here since Univer's own darkMode is
+     always false) — forcing their text dark here left dark text stranded on their still-dark
+     bubble. */
+  [class*="univer-text-white"]:not([class~="univer-bg-gray-700"]) {
     color: #1b1c1f !important;
   }
   /* The Name Box has no plain (non dark:) background utility at all — its light-mode
-     appearance is simply transparent, showing the toolbar behind it. */
-  :root[data-theme="light"] [class*="univer-bg-gray-900"] {
+     appearance is simply transparent, showing the toolbar behind it. Excludes elements that
+     also carry a real light-mode univer-bg-white — confirmed live this rule was too broad
+     without that exclusion: it was also matching the toolbar's own "more" overflow dropdown,
+     several sidebar panel sections, and a sticky panel header, all of which pair
+     dark:!univer-bg-gray-900 with a genuine univer-bg-white for their actual (correct)
+     light-mode appearance. Forcing those transparent too left the overflow dropdown rendering
+     with no background at all, its icons and the grid's row numbers bleeding through each
+     other underneath it. */
+  [class*="univer-bg-gray-900"]:not([class*="univer-bg-white"]) {
     background-color: transparent !important;
   }
   /* Toolbar buttons pair their dark text override with an always-present light-mode hover
      highlight (`hover:univer-bg-gray-100`) *and* a dark-mode-only hover override
      (`dark:hover:!univer-bg-gray-700`) — restore the intended light hover color specifically,
      rather than just clearing it to transparent and losing hover feedback entirely. */
-  :root[data-theme="light"] [class*="univer-bg-gray-700"]:hover {
+  [class*="univer-bg-gray-700"]:hover {
     background-color: #f3f4f6 !important;
   }
+}
+
+/* Univer centers its own ribbon tab list (Démarrer/Formules/Données) by default
+   (`univer-justify-center` in its bundled markup) — Google Sheets' own menu bar is left-aligned,
+   flush with the sheet content below it, not floating in the middle of the window. Targeted via
+   Univer's own semantic `role`/`aria-label` markers rather than its Tailwind utility classes,
+   since those are internal implementation detail that could be renamed on a Univer upgrade,
+   while this tablist's own accessibility contract is far more stable to key off. */
+[role="tablist"][aria-label="ui.ribbon.menu"] {
+  justify-content: flex-start !important;
+}
+
+/* Univer's whole ribbon header (the tab-list row above plus the icon-toolbar row below it —
+   undo/redo, font, fill, borders, etc.) has no background of its own; it's transparent, showing
+   through to the plain white surface behind the whole editor workbench. That left it reading as
+   the exact same white as the grid beneath it — no visible seam between "toolbar" and "sheet."
+   Tying it to --canvas (the same tone EditorPage.css's own .editor-chrome uses one level up), one
+   step darker, keeps the three horizontal bands (our topbar → this ribbon → the grid) each a
+   distinguishable layer instead of two of them collapsing into one. Selected via :has() off the
+   same stable tablist marker as the alignment fix above, rather than reaching for a bespoke
+   class, since this exact <header> has no class of its own worth keying off. */
+header:has([role="tablist"][aria-label="ui.ribbon.menu"]) {
+  background-color: #e8e9ec !important;
 }
 
 #root {
@@ -240,4 +227,84 @@ code {
   height: 14px;
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
+}
+
+/* ---- Toasts (NotificationContext) — mounted above the router, see its own comment. Several actions in
+   this app (uploading a workbook, converting to Word, creating a child sheet) can take a real,
+   noticeable while, and used to end in total silence either way: the only signal anything had
+   happened was a spinner quietly stopping. Bottom-left on purpose, not bottom-center: confirmed
+   live that bottom-center sits directly on top of a docked side panel's own footer buttons (see
+   .side-panel in EditorPage.css) while these very actions are in progress — briefly blocking
+   "Télécharger"/"Fermer" right when the user needs them. The top-right corner is already the
+   account/language menus, so bottom-left is the one corner nothing else in the app claims. ---- */
+.toast-stack {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--text-h);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(16, 24, 40, 0.18);
+  animation: toast-in 0.18s ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.toast-success svg {
+  color: #86efac;
+}
+
+.toast-error svg {
+  color: #fca5a5;
+}
+
+.toast-message {
+  flex: 1;
+}
+
+.toast-dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0 0 4px;
+}
+
+.toast-dismiss:hover {
+  color: #fff;
 }

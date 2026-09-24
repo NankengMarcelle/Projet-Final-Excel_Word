@@ -4,7 +4,9 @@ import { AppShell } from "../components/shell/AppShell";
 import { LoginPage } from "./LoginPage";
 import { RegisterPage } from "./RegisterPage";
 import { WorkspacePage } from "./WorkspacePage";
+import { AllWorkbooksPage } from "./AllWorkbooksPage";
 import { WordFilesPage } from "./WordFilesPage";
+import { NotificationsPage } from "./NotificationsPage";
 import { EditorPage } from "./EditorPage";
 import { AdminPage } from "./AdminPage";
 
@@ -22,7 +24,9 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { path: "/workspace", element: <WorkspacePage /> },
+          { path: "/workspace/all", element: <AllWorkbooksPage /> },
           { path: "/word-files", element: <WordFilesPage /> },
+          { path: "/notifications", element: <NotificationsPage /> },
         ],
       },
       { path: "/workbooks/:workbookId", element: <EditorPage /> },

@@ -19,13 +19,15 @@
    own native UI on screen. ---- */
 
 .editor-chrome {
-  /* Navy (#02006c), matching the app shell's sidebar/header — ported the same way AppShell.css
-     ported it from the colleague's UI, since the editor route intentionally isn't wrapped in
-     AppShell (see EditorPage's own layout note in router.tsx) but should still read as the same
-     app, not a visually separate light-grey tool bolted on. Not theme-aware, same reasoning as
-     the shell/auth chrome: fixed brand identity, not a light/dark surface. */
-  background: #02006c;
-  color: #fff;
+  /* Light, not navy — Google Sheets' own title/toolbar rows spend color only on the one accent
+     action (there, Share; here, Save), not the whole chrome. But it's a distinct *tone* from the
+     grid below (--canvas, not --surface's pure white) plus real elevation (see .expanded's own
+     shadow) — Sheets' toolbar is a perceptibly different, slightly-grey layer sitting above a
+     bright-white canvas, not the same white repeated twice with only a hairline between them
+     (confirmed live: a plain 1px border read as "everything is one flat white surface," not two
+     layers). The navy identity still shows up via the Save button and the file icon below. */
+  background: var(--canvas);
+  color: var(--text-h);
   font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   overflow: hidden;
   transition: max-height 0.18s ease, opacity 0.15s ease;
@@ -37,8 +39,10 @@
      for it when there's nothing to sync. */
   max-height: 110px;
   opacity: 1;
-  border-bottom: none;
-  box-shadow: 0 2px 10px rgba(2, 0, 108, 0.15);
+  border-bottom: 1px solid var(--border);
+  /* Real elevation, not just a border — this is the cue that tells you the toolbar is a raised
+     control layer floating above the sheet, the same role Sheets' own toolbar shadow plays. */
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .editor-chrome.collapsed {
@@ -61,7 +65,7 @@
 .editor-topbar-divider {
   width: 1px;
   height: 20px;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--border);
   flex-shrink: 0;
   margin: 0 2px;
 }
@@ -73,7 +77,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--text);
   flex-shrink: 0;
   text-decoration: none;
 }
@@ -84,21 +88,21 @@
 }
 
 .editor-back-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 .editor-title-icon {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  color: #fff;
+  color: var(--accent);
 }
 
 .editor-filename,
 .editor-filename-input {
   font-size: 13.5px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-h);
 }
 
 .editor-filename {
@@ -114,17 +118,16 @@
 }
 
 .editor-filename:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 .editor-filename-input {
-  border: 1.5px solid #fff;
+  border: 1.5px solid var(--accent);
   border-radius: 6px;
   padding: 2px 6px;
   outline: none;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface);
   font-family: inherit;
-  color: #fff;
 }
 
 .editor-settings-btn {
@@ -134,7 +137,7 @@
   border-radius: 50%;
   border: none;
   background: none;
-  color: #fff;
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -147,7 +150,7 @@
 }
 
 .editor-settings-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 /* ---- Collapse toggle: an inline button at the end of the toolbar row while expanded (mirrors
@@ -162,7 +165,7 @@
   border-radius: 50%;
   border: none;
   background: none;
-  color: #fff;
+  color: var(--text);
   opacity: 0.65;
   cursor: pointer;
   display: flex;
@@ -172,7 +175,7 @@
 
 .editor-collapse-toggle:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 .editor-collapse-toggle svg {
@@ -187,14 +190,15 @@
 .editor-collapse-strip {
   display: flex;
   justify-content: center;
-  background: #02006c;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border);
 }
 
 .editor-collapse-btn {
   width: 100%;
   border: none;
   background: none;
-  color: #fff;
+  color: var(--text);
   opacity: 0.65;
   padding: 3px;
   cursor: pointer;
@@ -205,7 +209,7 @@
 
 .editor-collapse-btn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-bg);
 }
 
 .editor-collapse-btn svg {
@@ -225,22 +229,20 @@
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  /* Solid white pill on navy text — same "primary action" language as .shell-nav-item.active
-     in AppShell.css, rather than introducing a one-off green accent (the colleague's reference
-     uses green here, but our design system has no --success token elsewhere, so a lone green
-     button would be inconsistent instead of matching). Deliberately the most visually distinct
+  /* Now that the chrome itself is light (see .editor-chrome), Save is the one accent-colored
+     element in the row instead of a white pill standing out on navy — same "primary action"
+     language as .shell-nav-item.active in AppShell.css. Deliberately the most visually distinct
      button in this row and the leftmost of the action buttons (right after Back) — mirroring
      where Excel puts Save in its own title bar, rather than burying it among the others. */
   border: none;
-  background: #fff;
-  color: #02006c;
+  background: var(--accent);
+  color: #fff;
   font: inherit;
   font-size: 11.5px;
   font-weight: 700;
   padding: 5px 10px;
   border-radius: 16px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .editor-save-btn svg {
@@ -249,7 +251,7 @@
 }
 
 .editor-save-btn:hover:not(:disabled) {
-  background: #e0e7ff;
+  background: var(--accent-hover);
 }
 
 .editor-save-btn:disabled {
@@ -266,7 +268,7 @@
   gap: 6px;
   font-size: 12.5px;
   font-weight: 600;
-  color: #e0e7ff;
+  color: var(--text);
 }
 
 .save-status svg {
@@ -275,11 +277,11 @@
 }
 
 .save-status-saved svg {
-  color: #86efac;
+  color: #16a34a;
 }
 
 .save-status-error {
-  color: #fca5a5;
+  color: var(--danger);
 }
 
 .save-status-spinner {
@@ -326,13 +328,13 @@
   align-items: center;
   gap: 7px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: #fff;
   font: inherit;
   font-size: 13.5px;
   font-weight: 600;
-  padding: 9px 14px;
+  padding: 9px 16px;
   cursor: pointer;
 }
 
@@ -365,8 +367,8 @@
 
 .editor-action-btn.ghost {
   /* Was white-on-navy, for the old always-visible sync-strip usage — every remaining use of
-     .ghost is now a Cancel/Close button inside a white .modal-card (ChildSheetModal,
-     ConvertToWordModal), where white text on white was rendering as an invisible button. */
+     .ghost is now a Cancel/Close button on a white surface (ChildSheetPanel, ConvertToWordPanel),
+     where white text on white was rendering as an invisible button. */
   background: none;
   color: var(--text-h);
   border: 1px solid var(--border);
@@ -376,11 +378,14 @@
   background: var(--code-bg);
 }
 
-/* select/input base styling wherever they appear inside the toolbar or modal */
+/* select/input base styling wherever they appear inside the toolbar, a modal, or a docked side
+   panel */
 .toolbar-panel select,
 .toolbar-panel input[type="text"],
 .modal-card select,
-.modal-card input[type="text"] {
+.modal-card input[type="text"],
+.side-panel select,
+.side-panel input[type="text"] {
   font: inherit;
   font-size: 13.5px;
   color: var(--text-h);
@@ -394,8 +399,20 @@
 .toolbar-panel select:focus,
 .toolbar-panel input[type="text"]:focus,
 .modal-card select:focus,
-.modal-card input[type="text"]:focus {
+.modal-card input[type="text"]:focus,
+.side-panel select:focus,
+.side-panel input[type="text"]:focus {
   border-color: var(--accent);
+}
+
+/* A side panel is much narrower than a centered modal card — its own form controls need to fill
+   that width explicitly, since a bare <select>/<input> otherwise sizes to content/browser
+   default rather than the column it sits in. */
+.side-panel select,
+.side-panel input[type="text"],
+.side-panel input[type="number"] {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* ---- Badges ---- */
@@ -483,6 +500,24 @@
   color: var(--text-h);
 }
 
+/* ---- Content area: everything below the chrome (grid + the docked child-sheet panel, when
+   open). Positioned so the panel (position: absolute) can dock to this area's right edge without
+   covering the chrome above it or needing JS to measure the chrome's own (variable, collapsible)
+   height. flex-direction: column (not the row default) so its lone normal-flow child — the grid
+   while ready, but LoadingState/the error message while the worksheets are still loading — is
+   stretched to full width via the column axis's default align-items: stretch, the same way
+   .editor-page (also column-flex) used to stretch it before this wrapper existed. A row-flex
+   container doesn't stretch children on the main axis, which is exactly what left LoadingState's
+   own internal centering sized to its own content and pinned to the left instead of centered. */
+
+.editor-content-area {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* ---- Grid ---- */
 
 .editor-grid-wrap {
@@ -491,30 +526,19 @@
      flexbox quirk, confirmed live — the parent measures its correct height, but a percentage-
      height child of it does not); giving that child `flex: 1` here instead sidesteps the
      percentage-resolution question entirely and sizes correctly from Fortune-sheet's first paint.
-     Padding on all four sides now (was 0 on top) so the grid never sits flush against the
-     viewport or the navy chrome — see .editor-grid-card below for the actual "floating sheet"
-     surface this padding creates room for (now nearly flush — see below). */
+     Flush against the chrome/viewport now, no padding — Google Sheets' own grid runs edge-to-
+     edge rather than floating as a framed card on a grey backdrop. */
   flex: 1;
   display: flex;
   min-height: 0;
-  padding: 1px;
-  box-sizing: border-box;
 }
 
 .editor-grid-card {
-  /* The grid as its own white, rounded surface floating on .editor-page's grey backdrop —
-     same idea as a real spreadsheet app framing the sheet as a distinct area, not raw canvas
-     touching the window edges. overflow:hidden clips Fortune-sheet's own square corners to
-     match the rounded card. */
   flex: 1;
   display: flex;
   min-height: 0;
   width: 100%;
   background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 4px 20px rgba(2, 0, 108, 0.08);
-  overflow: hidden;
-  box-sizing: border-box;
 }
 
 .editor-grid-error {
@@ -536,21 +560,6 @@
   font-family: var(--mono);
   max-width: 480px;
   word-break: break-word;
-}
-
-/* ---- Footer status bar ---- */
-
-.editor-footer {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 6px 24px;
-  font-size: 12px;
-  color: var(--text);
-  background: #f8fafc;
-  border-top: 1px solid var(--border);
 }
 
 /* ---- Modal ---- */
@@ -594,6 +603,78 @@
   display: flex;
   gap: 10px;
   margin-top: 18px;
+}
+
+/* ---- Side panel: docked to the right of the grid (inside .editor-content-area, which is
+   position: relative — see its own comment), not a centered modal over a dark backdrop. Excel's
+   own "Queries & Connections" pane (the reference for this) stays out of the user's way exactly
+   like this: parked beside the sheet instead of blocking it, so whatever the user needs to check
+   on the sheet itself is still visible without closing the form. No backdrop/click-outside-to-
+   close on purpose — the whole point is that the sheet underneath stays visible *and* usable
+   while one of these is open. Shared by every on-demand editor form that benefits from this
+   (create child sheet, convert to Word) rather than each cloning its own copy. ---- */
+
+.side-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -4px 0 16px rgba(16, 24, 40, 0.08);
+  z-index: 20;
+}
+
+.side-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.side-panel-header .modal-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.side-panel-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.side-panel-close:hover {
+  background: var(--code-bg);
+}
+
+.side-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.side-panel-footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
 }
 
 .child-sheet-source-section {

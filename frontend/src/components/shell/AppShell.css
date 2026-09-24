@@ -9,159 +9,117 @@
 .shell {
   display: flex;
   min-height: 100svh;
-  background: var(--bg);
-  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  /* Canvas, not flat white — see WorkspacePage.css's .workspace-list-card for the white surface
+     this is meant to set off. */
+  background: var(--canvas);
+  font-family: var(--sans);
 }
 
-/* ---- Sidebar (fixed brand navy — deliberately not theme-aware, see file header comment) ---- */
+/* ---- Sidebar: an on-demand drawer at every screen width, not a permanent column — matching
+   Google Sheets' own home (hamburger -> temporary overlay, nothing pinned eating width all
+   day). This app has three real nav destinations (Sheets has none, it's single-purpose), so
+   they live in this drawer instead of disappearing; see Header.tsx for the always-visible
+   hamburger + small brand mark that replaces the sidebar's own always-visible logo. Off-screen
+   by default (translateX), slides in over a backdrop when opened; nothing here depends on
+   viewport width anymore. */
 
+/* Floating, inset rounded panel — not a flush edge-to-edge rectangle. Confirmed against the
+   user's own reference: the single biggest thing separating a "generic template" drawer from a
+   considered one is that the sidebar reads as its own distinct rounded surface sitting on the
+   dimmed backdrop, with visible margin all around it, rather than a plain rectangle glued to the
+   viewport edge. */
 .shell-sidebar {
-  width: 232px;
-  min-width: 232px;
+  width: 264px;
+  min-width: 264px;
+  max-width: 82vw;
+  height: calc(100svh - 20px);
   height: 100svh;
-  position: sticky;
+  position: fixed;
+  top: 14px;
+  left: 14px;
   top: 0;
-  background: var(--sidebar-bg, #02006c);
+  left: 0;
+  z-index: 40;
+  border-radius: 10px;
+  background:  rgba(2, 0, 108);
+ 
   color: #fff;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
   overflow-x: hidden;
   overflow-y: auto;
   flex-shrink: 0;
-  transition: width 0.18s ease, min-width 0.18s ease;
+  /* Moves by more than its own width plus the left offset, so the closed state is still fully
+     off-screen despite no longer sitting flush at left:0. */
+  transform: translateX(-120%);
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
 }
 
-/* ---- Collapsed: icon-only rail. Text/tagline/flag hidden via width+opacity so the collapse
-   itself animates smoothly rather than content just vanishing mid-transition. ---- */
-
-.shell-sidebar.collapsed {
-  width: 72px;
-  min-width: 72px;
+.shell-sidebar.mobile-open {
+  transform: translateX(0);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
 }
 
-.shell-sidebar.collapsed .shell-sidebar-name,
-.shell-sidebar.collapsed .shell-sidebar-tagline,
-.shell-sidebar.collapsed .shell-flag-ribbon,
-.shell-sidebar.collapsed .shell-nav-item span,
-.shell-sidebar.collapsed .shell-logout-btn span {
-  display: none;
-}
-
-.shell-sidebar.collapsed .shell-sidebar-logo {
-  width: 40px;
-  height: 40px;
-}
-
-.shell-sidebar.collapsed .shell-sidebar-logo img {
-  width: 26px;
-  height: 26px;
-}
-
-.shell-sidebar.collapsed .shell-nav-item,
-.shell-sidebar.collapsed .shell-logout-btn {
-  justify-content: center;
-  padding: 0.6rem;
-}
-
+/* A single compact row — small logo badge, name, close button — replacing what used to be a
+   large centered logo, a separately absolute-positioned close button, and a two-line spelled-out
+   tagline underneath. The reference sidebar's own header is exactly this: one row, nothing
+   competing with the nav below it for attention. */
 .shell-sidebar-brand {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 1.2rem 1rem 1rem;
+  gap: 0.6rem;
+  padding: 1rem 1rem 1.2rem;
 }
 
 .shell-sidebar-logo {
-  width: 56px;
-  height: 56px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  margin-bottom: 0.6rem;
   flex-shrink: 0;
-  transition: width 0.18s ease, height 0.18s ease;
 }
 
 .shell-sidebar-logo img {
-  width: 38px;
-  height: 38px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
 }
 
 .shell-sidebar-name {
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  line-height: 1.2;
-}
-
-.shell-sidebar-tagline {
-  font-size: 0.6rem;
-  font-weight: 600;
-  color: #e0e7ff;
-  letter-spacing: 0.02em;
-  margin-top: 2px;
-  text-align: center;
-  line-height: 1.35;
-}
-
-.shell-flag-ribbon {
-  width: 100%;
-  height: 6px;
-  display: flex;
-  margin: 0.2rem 0 1.2rem;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-}
-
-.shell-flag-band {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-
-.shell-flag-green {
-  background: #007a3d;
-}
-
-.shell-flag-red {
-  background: #ce1126;
-}
-
-.shell-flag-red svg {
-  position: absolute;
-}
-
-.shell-flag-yellow {
-  background: #fcd116;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
 }
 
 .shell-nav {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.35rem;
   padding: 0 0.75rem;
 }
 
 .shell-nav-item {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
+  gap: 0.7rem;
   width: 100%;
-  padding: 0.6rem 0.75rem;
+  padding: 0.7rem 0.85rem;
   border-radius: 14px;
   border: none;
   background: transparent;
   color: #e0e7ff;
   font-family: inherit;
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   cursor: pointer;
   text-align: left;
   text-decoration: none;
@@ -200,10 +158,6 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-}
-
-.shell-collapse-btn {
-  color: #e0e7ff;
 }
 
 .shell-logout-btn {
@@ -267,7 +221,8 @@
    read as one consistent row instead of three different sizes (the search bar and account
    pill were previously sized by their own padding/avatar math rather than to a common value). */
 .shell-search,
-.shell-lang-toggle,
+.shell-lang-trigger,
+.shell-notification-trigger,
 .shell-account-pill {
   height: 36px;
   box-sizing: border-box;
@@ -312,66 +267,270 @@
   gap: 0.75rem;
 }
 
-.shell-lang-toggle {
-  display: flex;
-  align-items: center;
-  background: var(--code-bg);
-  border-radius: 20px;
-  padding: 3px;
-  border: 1px solid var(--border);
+/* ---- Notification bell: same trigger+dropdown shape as the language picker right next to it,
+   so the two read as one family of header controls rather than two different idioms. The badge
+   is a plain dot (no unread count number) — at header scale a number competes with the bell
+   icon itself for attention; "something happened" is the only thing this needs to signal before
+   the user actually opens it. ---- */
+
+.shell-notification-picker {
+  position: relative;
 }
 
-.shell-lang-toggle button {
-  height: 100%;
-  padding: 0 0.6rem;
-  border-radius: 16px;
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  font-family: inherit;
-  font-weight: 800;
-  font-size: 0.7rem;
+.shell-notification-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
   cursor: pointer;
 }
 
-.shell-lang-toggle button.active {
-  background: var(--accent);
-  color: #fff;
+.shell-notification-trigger:hover {
+  background: var(--code-bg);
+}
+
+.shell-notification-badge {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 1.5px solid var(--surface);
+}
+
+.shell-notification-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 320px;
+  max-width: 88vw;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(2, 0, 108, 0.15);
+  padding: 6px;
+  z-index: 30;
+}
+
+.shell-notification-menu-header {
+  padding: 8px 10px 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.shell-notification-menu .notification-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.shell-notification-menu-footer {
+  display: block;
+  text-align: center;
+  padding: 9px 10px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 0.775rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  border-radius: 0 0 8px 8px;
+}
+
+.shell-notification-menu-footer:hover {
+  background: var(--code-bg);
+}
+
+/* ---- Shared notification list (bell dropdown + the full /notifications page) ---- */
+
+.notification-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notification-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+}
+
+.notification-list-item svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.notification-list-item-success svg {
+  color: #16a34a;
+}
+
+.notification-list-item-error svg {
+  color: var(--danger);
+}
+
+/* An unread item gets a faint accent wash — subtle on purpose, this isn't a second badge, just
+   enough to distinguish "new since last time" while scanning the list. */
+.notification-list-item.unread {
+  background: var(--accent-bg);
+}
+
+.notification-list-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notification-list-item-message {
+  font-size: 0.8125rem;
+  color: var(--text-h);
+  line-height: 1.35;
+}
+
+.notification-list-item-time {
+  font-size: 0.7rem;
+  color: var(--text);
+}
+
+.notification-list-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--text);
+  margin: 0;
+}
+
+/* ---- Language picker: a dropdown trigger (flag + code + chevron), not a two-button toggle —
+   a toggle shows both states permanently, which is fine for two options but reads as a plain
+   default control; a single trigger that reveals the choice on demand carries more visual
+   weight for something used maybe once per session. ---- */
+
+.shell-lang-picker {
+  position: relative;
+}
+
+.shell-lang-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.shell-lang-trigger:hover {
+  background: var(--code-bg);
+}
+
+.shell-lang-trigger svg:last-child {
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.shell-lang-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(2, 0, 108, 0.15);
+  padding: 6px;
+  z-index: 30;
+}
+
+.shell-lang-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-h);
+  cursor: pointer;
+  text-align: left;
+}
+
+.shell-lang-menu-item:hover {
+  background: var(--code-bg);
+}
+
+.shell-lang-menu-item.active {
+  color: var(--accent);
+  font-weight: 800;
 }
 
 .shell-account {
   position: relative;
 }
 
+/* Borderless, no boxed background — the avatar and name carry the weight now, so the pill's
+   own chrome (border + fill) was just extra visual noise around content that already reads as
+   a distinct, clickable unit. */
 .shell-account-pill {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0 0.75rem 0 0.25rem;
-  border-radius: 30px;
-  background: var(--code-bg);
-  border: 1px solid var(--border);
+  gap: 0.6rem;
+  padding: 4px 8px 4px 4px;
+  border-radius: var(--radius-pill);
+  background: none;
+  border: none;
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 
 .shell-account-pill:hover {
-  background: var(--border);
+  background: var(--code-bg);
 }
 
 .shell-avatar {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-weight: 800;
-  font-size: 0.7rem;
+  font-weight: 700;
+  font-size: 0.8rem;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.shell-avatar-lg {
+  width: 42px;
+  height: 42px;
+  font-size: 0.95rem;
 }
 
 .shell-account-text {
@@ -382,10 +541,10 @@
 }
 
 .shell-account-name {
-  font-size: 0.725rem;
-  font-weight: 800;
-  color: var(--accent);
-  line-height: 1.1;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-h);
+  line-height: 1.15;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -393,19 +552,19 @@
 }
 
 .shell-account-role {
-  font-size: 0.6rem;
+  font-size: 0.65rem;
   color: var(--text);
   display: flex;
   align-items: center;
   gap: 3px;
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .shell-account-menu {
   position: absolute;
   right: 0;
   top: calc(100% + 10px);
-  width: 220px;
+  width: 240px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -416,15 +575,18 @@
 }
 
 .shell-account-menu-header {
-  padding: 8px 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 14px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 6px;
 }
 
 .shell-account-menu-name {
-  font-weight: 800;
-  color: var(--accent);
-  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-h);
+  font-size: 0.85rem;
 }
 
 .shell-account-menu-email {
@@ -456,11 +618,23 @@
   background: var(--code-bg);
 }
 
-/* ---- Mobile hamburger / drawer close button: both hidden above the mobile breakpoint, since
-   the sidebar is permanently visible there and neither one has anything to do. ---- */
+/* ---- Hamburger + brand mark: grouped tightly as one unit (own small gap), not spread apart by
+   .shell-header's own space-between — the logo sitting right next to the menu trigger is the
+   conventional placement on most sites, not spaced out toward the middle of the header. ---- */
+
+.shell-header-start {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ---- Hamburger / drawer close / backdrop: all always active now (see the sidebar's own
+   comment above) — a real Sheets-style menu trigger in the header, not a mobile-only
+   fallback. ---- */
 
 .shell-hamburger {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 36px;
@@ -477,16 +651,35 @@
   background: var(--code-bg);
 }
 
+.shell-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.shell-header-brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: contain;
+}
+
+.shell-header-brand span {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
 .shell-sidebar-close {
-  display: none;
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  width: 32px;
-  height: 32px;
+  display: flex;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 8px;
   border: none;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
@@ -498,22 +691,21 @@
 }
 
 .shell-backdrop {
-  display: none;
+  display: block;
+  position: fixed;
+  inset: 0;
+  /* Neutral dark scrim, not a brand-navy tint — the navy version at 0.4 opacity over a mostly
+     white page composites into a washed-out pastel lavender (confirmed live), which reads as a
+     stray wrong color rather than "the content behind this is dimmed." A true near-black scrim
+     is the standard fix: it recedes the background without introducing a color of its own. */
+  background: rgba(15, 15, 26, 0.55);
+  z-index: 35;
 }
 
-/* ---- Mobile: sidebar becomes an off-canvas drawer instead of a fixed-width flex item.
-   Previously there was no responsive behavior here at all — a non-shrinking 232px (or 72px
-   collapsed) sidebar sat in a flex row with the rest of the page on every viewport, so on a
-   phone screen the main content was squeezed into whatever width was left, forcing heavy
-   text-wrapping and a page far taller than its content needed ("hangs vertically" on real mobile
-   browsers, reported directly). Below this breakpoint the sidebar is taken out of the flex flow
-   (position: fixed) and hidden off-screen by default, so .shell-main gets the full viewport
-   width; it slides in as an overlay only when the header's hamburger button opens it. */
+/* ---- Narrow viewports only: the account pill's name/role text and the search bar's width
+   still need to shrink for a genuinely small screen — unrelated to the sidebar, which is now
+   an overlay at every width. ---- */
 @media (max-width: 768px) {
-  .shell-hamburger {
-    display: flex;
-  }
-
   .shell-search {
     max-width: 46vw;
   }
@@ -526,56 +718,5 @@
     padding: 0;
     border: none;
     background: none;
-  }
-
-  .shell-sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    z-index: 40;
-    width: 260px;
-    min-width: 260px;
-    max-width: 82vw;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease;
-  }
-
-  /* Always show the full labeled sidebar when opened as an overlay, regardless of the desktop
-     "collapsed" icon-rail preference — an icon-only drawer would be pointless here since it's
-     hidden entirely otherwise, there's no width to save. */
-  .shell-sidebar.collapsed {
-    width: 260px;
-    min-width: 260px;
-  }
-
-  .shell-sidebar.collapsed .shell-sidebar-name,
-  .shell-sidebar.collapsed .shell-sidebar-tagline,
-  .shell-sidebar.collapsed .shell-flag-ribbon,
-  .shell-sidebar.collapsed .shell-nav-item span,
-  .shell-sidebar.collapsed .shell-logout-btn span {
-    display: block;
-  }
-
-  .shell-sidebar.mobile-open {
-    transform: translateX(0);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
-  }
-
-  .shell-sidebar-close {
-    display: flex;
-  }
-
-  /* No effect in drawer mode (width is forced open above), so hiding it avoids a control that
-     visibly does nothing when tapped. */
-  .shell-collapse-btn {
-    display: none;
-  }
-
-  .shell-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 0, 108, 0.4);
-    z-index: 35;
   }
 }

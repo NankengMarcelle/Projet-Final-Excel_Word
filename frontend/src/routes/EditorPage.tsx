@@ -20,10 +20,10 @@ import {
 import { useDebouncedAutosave, type SaveStatus } from "../hooks/useDebouncedAutosave";
 import { EditorTopBar } from "../components/editor/EditorTopBar";
 import { LoadingState } from "../components/common/LoadingState";
-import { ChildSheetModal } from "../components/childSheet/ChildSheetModal";
+import { ChildSheetPanel } from "../components/childSheet/ChildSheetPanel";
+import { ConvertToWordPanel } from "../components/conversion/ConvertToWordPanel";
 import { DeleteSheetWarningModal } from "../components/editor/DeleteSheetWarningModal";
 import { ChevronIcon } from "../components/icons/EditorIcons";
-import { EditorFooter } from "../components/editor/EditorFooter";
 import { GridErrorBoundary } from "../components/editor/GridErrorBoundary";
 import type { WorksheetData, WorksheetRead } from "../types/worksheet";
 import { copy } from "../i18n/copy";
@@ -199,12 +199,6 @@ function EditorWorkbookReady({
     [workbookId, beginExternalSave, resolveExternalSave]
   );
 
-  // Tracked via Univer's own ActiveSheetChanged event (its native tab strip owns which sheet is
-  // active — we don't manage that ourselves), purely to know which worksheet's real row/column
-  // extent to show in the footer status bar. Defaults to whichever sheet loads first.
-  const [activeSheetId, setActiveSheetId] = useState(initialWorksheets[0]?.id);
-  const activeSheet = worksheetDataList.find((w) => w.id === activeSheetId);
-
   const workbookData = useMemo(
     () => ({
       id: workbookId,
@@ -239,7 +233,6 @@ function EditorWorkbookReady({
               ref={gridRef}
               workbookData={workbookData}
               onChange={handleChange}
-              onActiveSheetChange={setActiveSheetId}
               onStructuralEdit={handleStructuralEdit}
               onBeforeSheetDelete={handleBeforeSheetDelete}
               onSheetDeleted={handleSheetDeleted}
@@ -248,7 +241,6 @@ function EditorWorkbookReady({
           </GridErrorBoundary>
         </div>
       </div>
-      <EditorFooter activeSheet={activeSheet} />
       {pendingSheetDeletion && (
         <DeleteSheetWarningModal
           sheetName={pendingSheetDeletion.sheetName}
@@ -383,7 +375,11 @@ export function EditorPage() {
     enabled: !!workbookId,
   });
 
-  const [isChildSheetModalOpen, setIsChildSheetModalOpen] = useState(false);
+  // Only one of these two docked side panels (see .side-panel in EditorPage.css) can be open at
+  // a time — both dock to the same spot on the right edge, so showing one closes the other
+  // rather than letting them stack on top of each other.
+  const [isChildSheetPanelOpen, setIsChildSheetPanelOpen] = useState(false);
+  const [isConvertPanelOpen, setIsConvertPanelOpen] = useState(false);
   // Bumped after a successful sync so the grid remounts and picks up the freshly-synced
   // child sheet's content — Fortune-sheet only reads its `data` prop on mount, so simply
   // refetching the worksheet query behind the scenes wouldn't update what's on screen.
@@ -484,9 +480,16 @@ export function EditorPage() {
           onSave={handleSave}
           worksheets={sortedWorksheets}
           canCreateChildSheet={!!firstOriginalWorksheetId}
-          onCreateChildSheet={() => setIsChildSheetModalOpen(true)}
+          onCreateChildSheet={() => {
+            setIsConvertPanelOpen(false);
+            setIsChildSheetPanelOpen(true);
+          }}
           onChildSheetSynced={() => setSyncVersion((v) => v + 1)}
           onToggleCollapsed={toggleChromeCollapsed}
+          onConvertToWord={() => {
+            setIsChildSheetPanelOpen(false);
+            setIsConvertPanelOpen(true);
+          }}
           getComputedValues={getComputedValues}
         />
       </div>
@@ -504,28 +507,38 @@ export function EditorPage() {
         </div>
       )}
 
-      {workbookId && sortedWorksheets.length > 0 && (
-        <EditorWorkbook
-          key={worksheetListKey}
-          queryVersion={worksheetListKey}
-          workbookId={workbookId}
-          worksheets={sortedWorksheets}
-          onStatusChange={setSaveStatus}
-          onFlushReady={handleFlushReady}
-          onComputedValuesReady={handleComputedValuesReady}
-        />
-      )}
+      <div className="editor-content-area">
+        {workbookId && sortedWorksheets.length > 0 && (
+          <EditorWorkbook
+            key={worksheetListKey}
+            queryVersion={worksheetListKey}
+            workbookId={workbookId}
+            worksheets={sortedWorksheets}
+            onStatusChange={setSaveStatus}
+            onFlushReady={handleFlushReady}
+            onComputedValuesReady={handleComputedValuesReady}
+          />
+        )}
 
-      {isChildSheetModalOpen && firstOriginalWorksheetId && workbookId && (
-        <ChildSheetModal
-          workbookId={workbookId}
-          worksheets={sortedWorksheets}
-          defaultParentWorksheetId={firstOriginalWorksheetId}
-          onClose={() => setIsChildSheetModalOpen(false)}
-          onCreated={() => setIsChildSheetModalOpen(false)}
-          getComputedValues={getComputedValues}
-        />
-      )}
+        {isChildSheetPanelOpen && firstOriginalWorksheetId && workbookId && (
+          <ChildSheetPanel
+            workbookId={workbookId}
+            worksheets={sortedWorksheets}
+            defaultParentWorksheetId={firstOriginalWorksheetId}
+            onClose={() => setIsChildSheetPanelOpen(false)}
+            onCreated={() => setIsChildSheetPanelOpen(false)}
+            getComputedValues={getComputedValues}
+          />
+        )}
+
+        {isConvertPanelOpen && sortedWorksheets.length > 0 && (
+          <ConvertToWordPanel
+            worksheets={sortedWorksheets}
+            onClose={() => setIsConvertPanelOpen(false)}
+            getComputedValues={getComputedValues}
+          />
+        )}
+      </div>
     </div>
   );
 }

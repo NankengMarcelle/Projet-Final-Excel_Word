@@ -3,17 +3,24 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createChildSheet } from "../../api/childSheets";
 import { ApiError } from "../../api/client";
 import { SpinnerIcon } from "../icons/EditorIcons";
+import { CloseIcon } from "../icons/SettingsIcons";
 import type { ComputedCellValue } from "../../univer/UniverSheetGrid";
 import type { WorksheetRead } from "../../types/worksheet";
 import { copy } from "../../i18n/copy";
 import { useLang } from "../../i18n/useLang";
+import { useToast } from "../common/NotificationContext";
 import {
   ChildSheetSourceSection,
   createEmptySourceFormState,
   type SourceFormState,
 } from "./ChildSheetSourceSection";
 
-export function ChildSheetModal({
+// Docked to the right of the grid (see .side-panel in EditorPage.css) rather than a
+// centered modal over a dark backdrop — the reference for this was Excel's own "Queries &
+// Connections" pane, which parks beside the sheet instead of covering it, so the columns a
+// source sheet actually has stay visible (and the sheet itself stays usable) while filling out
+// this form, without needing to close it just to go check.
+export function ChildSheetPanel({
   workbookId,
   worksheets,
   defaultParentWorksheetId,
@@ -31,6 +38,7 @@ export function ChildSheetModal({
   const { lang } = useLang();
   const t = copy[lang];
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const [childSheetName, setChildSheetName] = useState("");
   const [sources, setSources] = useState<SourceFormState[]>([
     createEmptySourceFormState(defaultParentWorksheetId),
@@ -60,10 +68,13 @@ export function ChildSheetModal({
     },
     onSuccess: (response) => {
       void queryClient.invalidateQueries({ queryKey: ["workbooks", workbookId] });
+      showToast(t.childSheetCreatedToast(childSheetName), "success");
       onCreated(response.worksheet.id);
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? String(err.detail) : t.createChildSheetFailedError);
+      const message = err instanceof ApiError ? String(err.detail) : t.createChildSheetFailedError;
+      setError(message);
+      showToast(message, "error");
     },
   });
 
@@ -104,14 +115,15 @@ export function ChildSheetModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-label={t.createChildSheetTitle}
-        className="modal-card"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div role="dialog" aria-label={t.createChildSheetTitle} className="side-panel">
+      <div className="side-panel-header">
         <h2 className="modal-title">{t.createChildSheetTitle}</h2>
+        <button type="button" className="side-panel-close" onClick={onClose} aria-label={t.closeLabel} title={t.closeLabel}>
+          <CloseIcon />
+        </button>
+      </div>
+
+      <div className="side-panel-body">
         <label className="editor-panel-field">
           {t.childSheetNameLabel}
           <input type="text" value={childSheetName} onChange={(e) => setChildSheetName(e.target.value)} />
@@ -139,16 +151,16 @@ export function ChildSheetModal({
             {error}
           </p>
         )}
+      </div>
 
-        <div className="modal-actions">
-          <button type="button" className="editor-action-btn" onClick={handleSubmit} disabled={mutation.isPending}>
-            {mutation.isPending && <SpinnerIcon className="btn-spinner" />}
-            {mutation.isPending ? t.creatingLabel : t.createLabel}
-          </button>
-          <button type="button" className="editor-action-btn ghost" onClick={onClose}>
-            {t.cancelLabel}
-          </button>
-        </div>
+      <div className="side-panel-footer">
+        <button type="button" className="editor-action-btn" onClick={handleSubmit} disabled={mutation.isPending}>
+          {mutation.isPending && <SpinnerIcon className="btn-spinner" />}
+          {mutation.isPending ? t.creatingLabel : t.createLabel}
+        </button>
+        <button type="button" className="editor-action-btn ghost" onClick={onClose}>
+          {t.cancelLabel}
+        </button>
       </div>
     </div>
   );
