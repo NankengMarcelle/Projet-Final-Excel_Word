@@ -28,14 +28,20 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
-  overflow: hidden;
+  /* Gives the table breathing room instead of sitting flush against the card's own border —
+     the table itself (not this wrapper) now owns the corner clipping below, so this can stay
+     overflow: visible without losing the rounded look. */
+  padding: 8px;
   box-shadow: 0 4px 14px rgba(2, 0, 108, 0.05);
 }
 
 .admin-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13.5px;
+  border-radius: 10px;
+  overflow: hidden;
 }
 
 .admin-table th {
@@ -58,6 +64,12 @@
 
 .admin-table tr:last-child td {
   border-bottom: none;
+}
+
+.admin-actions-col {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .admin-badge {
@@ -85,4 +97,181 @@
 .admin-badge-inactive {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.admin-action-btn {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.admin-action-btn:hover:not(:disabled) {
+  background: var(--code-bg);
+  border-color: var(--accent);
+}
+
+.admin-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.admin-kebab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.admin-kebab-btn:hover,
+.admin-kebab-btn[aria-expanded="true"] {
+  background: var(--code-bg);
+  border-color: var(--border);
+}
+
+/* Portal-rendered to document.body (see RowActionsMenu in AdminPage.tsx) so it's never clipped
+   by the table card's own rounded-corner overflow, and always draws above everything else. */
+.admin-row-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 170px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(2, 0, 108, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-row-menu-item {
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.admin-row-menu-item:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+.admin-row-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.admin-row-menu-item-danger {
+  color: var(--danger);
+}
+
+.admin-row-menu-item-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.admin-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.admin-filter-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.admin-filter-select {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.admin-filter-date {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.admin-filter-date input {
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.admin-clear-filters {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-clear-filters:hover {
+  background: var(--accent-bg);
+}
+
+.admin-results-count {
+  font-size: 12.5px;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.admin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.admin-pagination-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
 }

@@ -24,7 +24,7 @@ export function LoadingState({
       </div>
       {percent !== null && (
         <div className="loading-progress-track">
-          <div className="loading-progress-fill" style={{ width: `${percent}%` }} />
+          <div className="loading-progress-fill" style={{ transform: `scaleX(${percent / 100})` }} />
         </div>
       )}
     </div>

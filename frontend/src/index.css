@@ -216,10 +216,15 @@ code {
 }
 
 .loading-progress-fill {
+  width: 100%;
   height: 100%;
   background: var(--accent);
   border-radius: 2px;
-  transition: width 0.2s ease;
+  /* scaleX, not width — animating width triggers layout on every frame; transform is
+     composited and doesn't. transform-origin keeps the fill growing from the left edge, same
+     visual direction the old width-based version had. */
+  transform-origin: left center;
+  transition: transform 0.2s ease;
 }
 
 .btn-spinner {

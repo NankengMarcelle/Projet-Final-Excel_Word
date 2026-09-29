@@ -7,7 +7,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from app.api.routes import auth as auth_routes
+from app.db.session import SessionLocal
 from app.main import app
+from app.models.user import User
 from app.services.email_sender import ConsoleEmailSender, get_email_sender
 
 # Tests must never depend on a real mail provider — whatever SMTP_* settings a developer's own
@@ -85,4 +87,33 @@ def register_and_login(api_client: TestClient) -> tuple[str, str]:
 @pytest.fixture
 def auth_headers(api_client: TestClient) -> dict:
     _, token = register_and_login(api_client)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _promote_to_admin(email: str) -> None:
+    # No app-level bootstrap path exists for creating the very first admin (that's the real-world
+    # gap #10 leaves open — see admin.py's own comments) — a direct DB write here mirrors exactly
+    # what a real operator has to do today to promote the first admin account.
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).one()
+        user.role = "admin"
+        db.commit()
+    finally:
+        db.close()
+
+
+def register_and_login_as_admin(api_client: TestClient) -> tuple[str, str]:
+    email, token = register_and_login(api_client)
+    _promote_to_admin(email)
+    # The access token minted at login already has this user's id as its subject — role isn't
+    # baked into the JWT itself (see create_access_token), it's looked up fresh from the DB on
+    # every request via get_current_user, so the existing token is valid for admin routes too
+    # without needing to log in again after the promotion above.
+    return email, token
+
+
+@pytest.fixture
+def admin_auth_headers(api_client: TestClient) -> dict:
+    _, token = register_and_login_as_admin(api_client)
     return {"Authorization": f"Bearer {token}"}
