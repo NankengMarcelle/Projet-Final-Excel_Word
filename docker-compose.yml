@@ -32,6 +32,21 @@ services:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       SECRET_KEY: ${SECRET_KEY}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: ${PASSWORD_RESET_TOKEN_EXPIRE_MINUTES:-30}
+      # Where the deployed frontend is actually served from — used to build the link inside a
+      # password-reset email. Same address FRONTEND_API_BASE_URL below points the browser at,
+      # since that's the frontend's own published URL on this VM.
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:8080}
+      # Left unset (empty) by default, which is deliberate: get_email_sender() then falls back
+      # to logging the reset link to `docker compose logs backend` instead of actually emailing
+      # it (see app/services/email_sender.py) — the app runs fine either way. Fill these in in
+      # .env.docker once a real SMTP provider is set up to start sending real email.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
       # Absolute path, not the "storage" relative default — makes exactly what's being
       # persisted by the volume below unambiguous, rather than relying on the container's CWD.
       STORAGE_ROOT: /data/storage
