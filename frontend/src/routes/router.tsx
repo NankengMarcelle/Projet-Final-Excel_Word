@@ -3,6 +3,8 @@ import { AdminRoute, ProtectedRoute } from "../auth/ProtectedRoute";
 import { AppShell } from "../components/shell/AppShell";
 import { LoginPage } from "./LoginPage";
 import { RegisterPage } from "./RegisterPage";
+import { ForgotPasswordPage } from "./ForgotPasswordPage";
+import { ResetPasswordPage } from "./ResetPasswordPage";
 import { WorkspacePage } from "./WorkspacePage";
 import { AllWorkbooksPage } from "./AllWorkbooksPage";
 import { WordFilesPage } from "./WordFilesPage";
@@ -14,6 +16,8 @@ export const router = createBrowserRouter([
   { path: "/", element: <Navigate to="/workspace" replace /> },
   { path: "/login", element: <LoginPage /> },
   { path: "/register", element: <RegisterPage /> },
+  { path: "/forgot-password", element: <ForgotPasswordPage /> },
+  { path: "/reset-password", element: <ResetPasswordPage /> },
   {
     element: <ProtectedRoute />,
     children: [

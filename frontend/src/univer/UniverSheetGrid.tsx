@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { createUniver, LocaleType, defaultTheme, type IWorkbookData, type IWorksheetData } from "@univerjs/presets";
 
 type UniverAPI = ReturnType<typeof createUniver>["univerAPI"];

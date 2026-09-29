@@ -7,3 +7,5 @@ from app.models.worksheet import Worksheet  # noqa: F401
 from app.models.sheet_relationship import SheetRelationship  # noqa: F401
 from app.models.conversion import Conversion  # noqa: F401
 from app.models.word_document import WordDocument  # noqa: F401
+from app.models.refresh_token import RefreshToken  # noqa: F401
+from app.models.password_reset_token import PasswordResetToken  # noqa: F401

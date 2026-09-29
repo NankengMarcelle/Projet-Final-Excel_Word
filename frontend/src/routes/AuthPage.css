@@ -236,8 +236,7 @@
   height: 15px;
 }
 
-.auth-link,
-.auth-link-muted {
+.auth-link {
   color: #02006c;
   font-weight: 800;
   text-decoration: underline;
@@ -248,13 +247,6 @@
   font-family: inherit;
 }
 
-.auth-link-muted[aria-disabled="true"] {
-  color: #9aa0b4;
-  cursor: default;
-  pointer-events: none;
-  text-decoration: none;
-}
-
 .auth-alert {
   margin: 0;
   font-size: 0.8rem;
@@ -262,6 +254,17 @@
   color: #991b1b;
   background: #fef2f2;
   border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 0.6rem 0.85rem;
+}
+
+.auth-alert-success {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
   border-radius: 12px;
   padding: 0.6rem 0.85rem;
 }

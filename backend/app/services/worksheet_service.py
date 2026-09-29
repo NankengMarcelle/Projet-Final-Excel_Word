@@ -1,4 +1,3 @@
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,8 +23,6 @@ def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: s
 
 
 def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> WorksheetData:
-    # TEMPORARY: see apply_edits' matching timer for context — remove together.
-    request_start = time.perf_counter()
     path = Path(workbook.storage_path)
     # Two separate loads: one keeps formula text, the other gives Excel's last cached
     # calculated value — openpyxl cannot return both from a single load. Both go through the
@@ -134,7 +131,6 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
         data_validations=metadata.data_validations,
         autofilter=metadata.autofilter,
     )
-    print(f"[PERF] read_worksheet_data: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return result
 
 
@@ -164,22 +160,13 @@ def apply_edits(
     relationships rooted on this sheet can have their stored positions shifted to match — see
     _shift_relationships_for_structural_edit.
     """
-    # TEMPORARY: total end-to-end timer for the live latency investigation — see excel_io.py's
-    # _perf_log for the per-phase breakdown this should sum to. Remove both once diagnosed.
-    request_start = time.perf_counter()
     path = Path(workbook.storage_path)
     # Held for the whole load-mutate-save cycle, not just the save — two overlapping edits to
     # the same workbook (or an edit racing a child-sheet create/sync) corrupted a real file
     # live by each independently reading and rewriting it at once. See
     # excel_io.workbook_write_lock()'s own docstring for the full story.
-    #
-    # TEMPORARY: manual acquire (instead of `with excel_io.workbook_write_lock(path):`) so the
-    # wait to acquire it can be timed separately from the work done while holding it — part of
-    # the same live latency investigation as request_start above. Remove together.
     lock = excel_io.workbook_write_lock(path)
-    lock_wait_start = time.perf_counter()
     lock.acquire()
-    print(f"[PERF] apply_edits: lock acquisition wait: {time.perf_counter() - lock_wait_start:.3f}s", flush=True)
     try:
         # load_workbook_for_write (not the plain load_workbook a bare read would use) reuses a
         # still-fresh Workbook object left over from an immediately-preceding write to this
@@ -252,7 +239,6 @@ def apply_edits(
         )
     db.commit()
     db.refresh(worksheet)
-    print(f"[PERF] apply_edits: TOTAL end-to-end: {time.perf_counter() - request_start:.3f}s", flush=True)
     return worksheet
 
 

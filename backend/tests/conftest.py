@@ -6,7 +6,17 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
+from app.api.routes import auth as auth_routes
 from app.main import app
+from app.services.email_sender import ConsoleEmailSender, get_email_sender
+
+# Tests must never depend on a real mail provider — whatever SMTP_* settings a developer's own
+# .env happens to have set (e.g. for manually testing the live reset-email flow against
+# Mailtrap) would otherwise make the suite make real network calls, which is slow, flaky, and
+# in practice hit Mailtrap's own sandbox rate limit mid-run (confirmed live: a full test_auth.py
+# run tripped "550 Too many emails per second" once real SMTP creds were in .env). This override
+# keeps the suite on the fast, hermetic ConsoleEmailSender unconditionally.
+app.dependency_overrides[get_email_sender] = lambda: ConsoleEmailSender()
 
 client = TestClient(app)
 
@@ -14,6 +24,18 @@ client = TestClient(app)
 @pytest.fixture
 def api_client() -> TestClient:
     return client
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters():
+    # TestClient sends every request from the same client IP, so without this, register's
+    # IP-only rate limit would accumulate across the whole test run (100+ tests register a
+    # user) rather than being scoped per test — this isolates each test the same way a fresh
+    # random email already isolates the (ip, email)-keyed login/forgot-password limiters.
+    auth_routes.register_rate_limiter.reset()
+    auth_routes.login_rate_limiter.reset()
+    auth_routes.forgot_password_rate_limiter.reset()
+    yield
 
 
 def _build_sample_workbook_bytes() -> bytes:

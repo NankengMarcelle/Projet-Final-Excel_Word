@@ -16,13 +16,6 @@ from app.spreadsheet import object_storage
 
 logger = logging.getLogger(__name__)
 
-# TEMPORARY diagnostic instrumentation for the live single-cell-edit latency investigation
-# (still open from Friday, now compounded by S3 round trips added by the Supabase migration).
-# Remove once the fix lands — see CLAUDE.md's "Autosave performance fix" section for the
-# original ~30s-per-edit diagnosis this is re-measuring against the live deployment.
-def _perf_log(label: str, seconds: float) -> None:
-    print(f"[PERF] {label}: {seconds:.3f}s", flush=True)
-
 
 def _replace_with_retry(tmp_path: Path, path: Path, *, attempts: int = 5, delay: float = 0.2) -> None:
     """os.replace() wrapper tolerating a transient Windows sharing violation (WinError 5,
@@ -79,9 +72,7 @@ def ensure_local(path: Path) -> None:
     anywhere yet (a fresh upload not yet saved) — download() will raise in that case, same as
     a plain missing local file would."""
     if _is_s3_backend() and not path.exists():
-        start = time.perf_counter()
         object_storage.download(_object_key(path), path)
-        _perf_log("ensure_local: S3 download (cold-cache miss)", time.perf_counter() - start)
 
 
 def upload_if_remote(path: Path) -> None:
@@ -97,12 +88,8 @@ def delete_object(path: Path) -> None:
 
 def save_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    start = time.perf_counter()
     path.write_bytes(content)
-    _perf_log("save_bytes: local write", time.perf_counter() - start)
-    start = time.perf_counter()
     upload_if_remote(path)
-    _perf_log("save_bytes: S3 upload", time.perf_counter() - start)
 
 
 # --- Write safety ------------------------------------------------------------
@@ -147,10 +134,7 @@ def load_workbook(path: Path, *, data_only: bool = False) -> OpenpyxlWorkbook:
     load of the same file — openpyxl cannot return both from one load.
     """
     ensure_local(path)
-    start = time.perf_counter()
-    result = openpyxl_load_workbook(path, data_only=data_only)
-    _perf_log(f"load_workbook(data_only={data_only})", time.perf_counter() - start)
-    return result
+    return openpyxl_load_workbook(path, data_only=data_only)
 
 
 def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
@@ -163,13 +147,9 @@ def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
     workbook_write_lock() for that — it only prevents a partial write from ever being visible."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    start = time.perf_counter()
     workbook.save(tmp_path)
     _replace_with_retry(tmp_path, path)
-    _perf_log("save_workbook: local openpyxl write", time.perf_counter() - start)
-    start = time.perf_counter()
     upload_if_remote(path)
-    _perf_log("save_workbook: S3 upload", time.perf_counter() - start)
 
 
 _XML_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -229,12 +209,7 @@ def save_workbook_preserving_formula_cache(
     """
     cached_values: dict[tuple[str, str], object] = {}
     if path.exists():
-        scan_start = time.perf_counter()
         cached_values = _read_cached_formula_values(path, workbook.sheetnames, skip_sheets, exclude)
-        _perf_log(
-            "save_workbook_preserving_formula_cache: raw-XML formula-cell scan",
-            time.perf_counter() - scan_start,
-        )
 
     save_workbook(workbook, path)
 
@@ -347,7 +322,6 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
     and this is the only way to give a formula cell a cached value, since openpyxl's writer
     has no concept of "formula plus cached result" (see save_workbook_preserving_formula_cache
     for why)."""
-    start = time.perf_counter()
     values_by_sheet: dict[str, dict[str, object]] = {}
     for (sheet_name, coordinate), value in cached_values.items():
         values_by_sheet.setdefault(sheet_name, {})[coordinate] = value
@@ -371,7 +345,6 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
             changed = True
 
     if not changed:
-        _perf_log("_reinject_formula_cache: read+patch (no-op, no changed cells)", time.perf_counter() - start)
         return
 
     # .xlsx has no in-place-edit-one-member API — openpyxl's own writer rebuilds the whole
@@ -391,14 +364,11 @@ def _reinject_formula_cache(path: Path, cached_values: dict[tuple[str, str], obj
         for info in infos:
             archive.writestr(info, contents[info.filename])
     _replace_with_retry(tmp_path, path)
-    _perf_log("_reinject_formula_cache: read+patch+rewrite zip", time.perf_counter() - start)
     # save_workbook() already uploaded once above (save_workbook_preserving_formula_cache calls
     # it before this function) — this is a second, harmless redundant upload for the case where
     # this function is the true last writer of the cycle. Both happen inside the caller's
     # workbook_write_lock, so there's no interleaving risk, just one extra network call.
-    start = time.perf_counter()
     upload_if_remote(path)
-    _perf_log("_reinject_formula_cache: S3 upload", time.perf_counter() - start)
 
 
 def _map_sheet_names_to_xml_parts(workbook_xml: bytes, rels_xml: bytes) -> dict[str, str]:

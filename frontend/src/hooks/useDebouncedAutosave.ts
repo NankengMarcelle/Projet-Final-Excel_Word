@@ -3,6 +3,7 @@ import type { IWorksheetData } from "@univerjs/presets";
 import { diffCellValues, extractCellValues, type CellSnapshotMap } from "../univer/adapter";
 import type { ChangedWorksheetsSnapshot } from "../univer/UniverSheetGrid";
 import type { CellEdit, WorksheetMetadataUpdate } from "../types/worksheet";
+import { registerUnsavedWorkChecker, unregisterUnsavedWorkChecker } from "../api/unsavedWorkGuard";
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -230,6 +231,17 @@ export function useDebouncedAutosave(
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  // Same "is anything actually unsaved right now" check as the beforeunload guard above, but
+  // exposed to client.ts's 401 handler (a plain module outside React — see unsavedWorkGuard.ts
+  // for why this needs a registry instead of a normal import). A forced logout (expired token)
+  // used to hard-redirect with no regard for whether an edit was mid-save at that exact moment,
+  // silently dropping it — this is what lets that redirect warn the user honestly instead.
+  useEffect(() => {
+    const checker = () => Object.keys(pendingRef.current).length > 0 || savingIdsRef.current.size > 0;
+    registerUnsavedWorkChecker(checker);
+    return () => unregisterUnsavedWorkChecker(checker);
   }, []);
 
   // Called right before sending a structural edit (insert/delete row or column) to the

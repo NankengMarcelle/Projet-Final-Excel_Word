@@ -112,10 +112,9 @@ export function LoginPage() {
               />
               {t.keepLoggedIn}
             </label>
-            {/* No password-reset flow exists on the backend yet; kept inert rather than faking one. */}
-            <span className="auth-link-muted" aria-disabled="true">
+            <Link to="/forgot-password" className="auth-link">
               {t.forgotPassword}
-            </span>
+            </Link>
           </div>
 
           {error && (

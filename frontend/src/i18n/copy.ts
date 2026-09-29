@@ -33,6 +33,24 @@ export const copy = {
     loginFailed: "Échec de la connexion",
     registerFailed: "Échec de l'inscription",
 
+    // Forgot / reset password pages
+    forgotPasswordHeading: "Mot de passe oublié",
+    forgotPasswordSubtitle: "Saisissez votre email et nous vous enverrons un lien de réinitialisation.",
+    sendResetLink: "Envoyer le lien",
+    sendingResetLink: "Envoi en cours...",
+    resetLinkSentMessage:
+      "Si un compte existe avec cet email, un lien de réinitialisation vient d'être envoyé.",
+    backToLogin: "Retour à la connexion",
+    resetPasswordHeading: "Réinitialiser le mot de passe",
+    resetPasswordSubtitle: "Choisissez un nouveau mot de passe pour votre compte.",
+    newPasswordLabel: "Nouveau mot de passe",
+    resetPassword: "Réinitialiser le mot de passe",
+    resettingPassword: "Réinitialisation en cours...",
+    resetPasswordSuccessMessage: "Mot de passe réinitialisé. Vous pouvez maintenant vous connecter.",
+    resetPasswordFailed: "Ce lien est invalide ou a expiré.",
+    resetPasswordMissingToken: "Ce lien de réinitialisation est invalide.",
+    requestNewResetLink: "Demander un nouveau lien",
+
     // Sidebar
     navWorkbooks: "Accueil",
     navWordFiles: "Fichiers Word (Convertis)",
@@ -219,6 +237,23 @@ export const copy = {
     passwordMismatch: "Passwords don't match.",
     loginFailed: "Login failed",
     registerFailed: "Registration failed",
+
+    // Forgot / reset password pages
+    forgotPasswordHeading: "Forgot Password",
+    forgotPasswordSubtitle: "Enter your email and we'll send you a reset link.",
+    sendResetLink: "Send Reset Link",
+    sendingResetLink: "Sending...",
+    resetLinkSentMessage: "If an account exists with that email, a reset link has just been sent.",
+    backToLogin: "Back to Login",
+    resetPasswordHeading: "Reset Password",
+    resetPasswordSubtitle: "Choose a new password for your account.",
+    newPasswordLabel: "New Password",
+    resetPassword: "Reset Password",
+    resettingPassword: "Resetting...",
+    resetPasswordSuccessMessage: "Password reset. You can now log in.",
+    resetPasswordFailed: "This link is invalid or has expired.",
+    resetPasswordMissingToken: "This reset link is invalid.",
+    requestNewResetLink: "Request a new link",
 
     navWorkbooks: "Home",
     navWordFiles: "Word Documents",

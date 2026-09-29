@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useState, type ReactNode } from "react";
 import * as authApi from "../api/auth";
-import { clearToken, getToken, setToken } from "../api/client";
+import { clearTokens, getRefreshToken, getToken, setTokens } from "../api/client";
 import type { UserRead } from "../types/auth";
 
 interface AuthContextValue {
@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = await authApi.getCurrentUser();
       setUser(currentUser);
     } catch {
-      clearToken();
+      clearTokens();
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string, remember: boolean = true) => {
     const token = await authApi.login(email, password);
-    setToken(token.access_token, remember);
+    setTokens(token.access_token, token.refresh_token, remember);
     const currentUser = await authApi.getCurrentUser();
     setUser(currentUser);
   }, []);
@@ -51,7 +51,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [login]);
 
   const logout = useCallback(() => {
-    clearToken();
+    // Best-effort, fire-and-forget: the refresh token is revoked server-side so it can't be
+    // replayed after logout, but the user shouldn't wait on a network round trip to be signed
+    // out locally — clearing local state below is what actually ends their session here.
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      authApi.logout(refreshToken).catch(() => {});
+    }
+    clearTokens();
     setUser(null);
   }, []);
 
