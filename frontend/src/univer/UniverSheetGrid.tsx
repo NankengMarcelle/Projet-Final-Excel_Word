@@ -54,7 +54,12 @@ import "@univerjs/preset-sheets-data-validation/lib/index.css";
 import "@univerjs/preset-sheets-conditional-formatting/lib/index.css";
 
 import { useLang } from "../i18n/useLang";
-import { buildWorksheetMetadataUpdate, type RawConditionalFormatRule, type RawDataValidationRule } from "./adapter";
+import {
+  buildWorksheetMetadataUpdate,
+  normalizeFreezeSnapshot,
+  type RawConditionalFormatRule,
+  type RawDataValidationRule,
+} from "./adapter";
 import type { WorksheetMetadataUpdate } from "../types/worksheet";
 
 // Each preset ships its own locale pack (UI strings for its own menus/panels) — unlike
@@ -324,12 +329,10 @@ export const UniverSheetGrid = forwardRef<UniverSheetGridHandle, UniverSheetGrid
         const snapshot = worksheet.getSheet().getSnapshot();
 
         // "No freeze" is represented as {startRow: -1, startColumn: -1, ySplit: 0, xSplit: 0},
-        // not an absent field — confirmed live via cancelFreeze().
-        const freezeSnapshot = snapshot.freeze;
-        const freeze =
-          freezeSnapshot && freezeSnapshot.startRow >= 0 && freezeSnapshot.startColumn >= 0
-            ? { startRow: freezeSnapshot.startRow, startColumn: freezeSnapshot.startColumn }
-            : null;
+        // not an absent field — confirmed live via cancelFreeze(). See
+        // normalizeFreezeSnapshot's own docstring for why -1 on just *one* axis (a row-only or
+        // column-only freeze) still needs to be treated as a real freeze, not discarded.
+        const freeze = normalizeFreezeSnapshot(snapshot.freeze);
 
         // Each rule's own `ranges` is a list (a rule can apply to several disjoint ranges) —
         // flattened to one entry per range here since the backend's schema is one range per

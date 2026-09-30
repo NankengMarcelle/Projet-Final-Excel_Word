@@ -4,6 +4,7 @@ import {
   buildWorksheetMetadataUpdate,
   diffCellValues,
   extractCellValues,
+  normalizeFreezeSnapshot,
   type RawWorksheetMetadata,
 } from "./adapter";
 import type { WorksheetData } from "../types/worksheet";
@@ -164,6 +165,44 @@ describe("backendToUniverWorksheetData", () => {
 
     const result = backendToUniverWorksheetData(sheet);
     expect(result.freeze).toEqual({ startRow: 1, startColumn: 1, ySplit: 1, xSplit: 1 });
+  });
+});
+
+describe("normalizeFreezeSnapshot", () => {
+  // Regression coverage for a real, serious bug: a freeze the user set through the app's own
+  // Figer/Freeze quick-menu looked and scrolled correctly for the rest of that same session,
+  // but was silently never saved — reopening the file always showed no freeze at all. Root
+  // cause: Univer reports a row-only freeze with startColumn: -1 (and a column-only freeze
+  // with startRow: -1), which a check requiring *both* axes to be >= 0 wrongly treated as "no
+  // freeze", identically to the real no-freeze state — see this function's own docstring.
+
+  it("treats both axes at -1 as no freeze", () => {
+    expect(normalizeFreezeSnapshot({ startRow: -1, startColumn: -1 })).toBeNull();
+  });
+
+  it("treats a null snapshot as no freeze", () => {
+    expect(normalizeFreezeSnapshot(null)).toBeNull();
+  });
+
+  it("normalizes a row-only freeze (startColumn: -1) instead of discarding it", () => {
+    expect(normalizeFreezeSnapshot({ startRow: 2, startColumn: -1 })).toEqual({
+      startRow: 2,
+      startColumn: 0,
+    });
+  });
+
+  it("normalizes a column-only freeze (startRow: -1) instead of discarding it", () => {
+    expect(normalizeFreezeSnapshot({ startRow: -1, startColumn: 3 })).toEqual({
+      startRow: 0,
+      startColumn: 3,
+    });
+  });
+
+  it("passes a corner freeze (both axes set) through unchanged", () => {
+    expect(normalizeFreezeSnapshot({ startRow: 1, startColumn: 1 })).toEqual({
+      startRow: 1,
+      startColumn: 1,
+    });
   });
 });
 

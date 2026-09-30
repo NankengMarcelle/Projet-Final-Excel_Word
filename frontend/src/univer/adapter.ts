@@ -576,6 +576,30 @@ export interface RawAutofilter {
   columns: RawAutofilterColumn[];
 }
 
+// Univer's own freeze snapshot shape: {startRow, startColumn, ySplit, xSplit}, where -1 in
+// startRow or startColumn means "not frozen on that axis" — NOT the same as "no freeze at
+// all". A row-only freeze (by far the most common case — "freeze header rows" via the
+// Figer/Freeze quick-menu) reports startColumn: -1; a column-only freeze reports startRow:
+// -1. Only *both* being -1 together means no freeze. Confirmed live: a check requiring both
+// to be >= 0 silently discarded every row-only or column-only freeze from every save — it
+// still rendered and scrolled correctly for the rest of that same session (Univer's live
+// rendering keys off ySplit/xSplit, not this check), but reopening the file showed no freeze
+// at all, since nothing had actually reached the backend.
+export function normalizeFreezeSnapshot(
+  freezeSnapshot: { startRow: number; startColumn: number } | null | undefined
+): { startRow: number; startColumn: number } | null {
+  if (!freezeSnapshot || (freezeSnapshot.startRow < 0 && freezeSnapshot.startColumn < 0)) {
+    return null;
+  }
+  // -1 on the unfrozen axis is normalized to 0 here, matching Excel/openpyxl's own
+  // freeze_panes convention: a row-only freeze through row 2 is stored as "A3" (column A),
+  // not a missing column.
+  return {
+    startRow: Math.max(freezeSnapshot.startRow, 0),
+    startColumn: Math.max(freezeSnapshot.startColumn, 0),
+  };
+}
+
 export interface RawWorksheetMetadata {
   name: string;
   freeze: { startRow: number; startColumn: number } | null;
