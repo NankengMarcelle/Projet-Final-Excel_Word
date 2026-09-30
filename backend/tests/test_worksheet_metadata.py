@@ -1,4 +1,7 @@
+import io
+
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 
 def _upload_sample(api_client: TestClient, headers: dict, sample_xlsx_bytes: bytes) -> dict:
@@ -59,6 +62,34 @@ def test_merges_freeze_and_column_row_sizing_round_trip(
     assert "D" in data["column_hidden"]
     assert data["row_heights"]["1"] == 30.0
     assert data["row_hidden"] == [4]
+
+
+def test_import_strips_freeze_from_uploaded_file_but_a_later_user_freeze_persists(
+    api_client: TestClient, auth_headers: dict
+):
+    # Regression test for a real bug found in a real production workbook: Excel sets a freeze
+    # based on whichever cell was selected the moment "Freeze Panes" was clicked, not always
+    # row 1/column A, so a workbook that's passed through several editors can end up with a
+    # freeze covering most of the sheet by accident (confirmed live: 97% of one real sheet, 91%
+    # of another). Every uploaded workbook should start freeze-free regardless of what the
+    # source file had — but a freeze the user then sets themselves, through the app's own
+    # metadata update, must still stick on the next read (freeze is cleared once, at import,
+    # not on every read, or a user-set freeze would be wiped out too).
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.freeze_panes = "C9"
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    workbook_id, worksheet_id = _upload_and_get_ids(api_client, auth_headers, buffer.getvalue())
+
+    data = _get_worksheet(api_client, auth_headers, workbook_id, worksheet_id)
+    assert not data["freeze"]
+
+    _put_metadata(api_client, auth_headers, workbook_id, worksheet_id, {"freeze": "B2"})
+    data = _get_worksheet(api_client, auth_headers, workbook_id, worksheet_id)
+    assert data["freeze"] == "B2"
 
 
 def test_conditional_format_data_validation_and_autofilter_round_trip(

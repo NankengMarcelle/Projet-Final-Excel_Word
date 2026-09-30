@@ -29,7 +29,24 @@ def import_workbook(db: Session, *, owner_id: uuid.UUID, upload: UploadFile) -> 
         )
 
     sheet_names = opened.sheetnames
-    opened.close()
+
+    # Clear any freeze panes the uploaded file already had. Excel sets a freeze based on
+    # whichever cell happened to be selected the moment "Freeze Panes" was clicked, not always
+    # row 1/column A as intended — a workbook that's passed through several editors can end up
+    # with a freeze covering most of the sheet by mistake, not a deliberate header freeze.
+    # Confirmed live against a real workbook: one sheet had 97% of its rows frozen this way,
+    # another 91%, both clearly accidental. Rather than guessing whether an imported freeze was
+    # ever intentional, every workbook starts freeze-free in the app; a user who wants one sets
+    # it themselves through the editor's own freeze controls, same as any other metadata
+    # change, which is then persisted normally from that point on.
+    for sheet_name in sheet_names:
+        opened[sheet_name].freeze_panes = None
+    # save_workbook_preserving_formula_cache, not a plain save — this workbook was loaded
+    # data_only=False (formula text, not cached values), and openpyxl blanks a formula cell's
+    # displayed value workbook-wide on an ordinary save if that cache isn't explicitly
+    # restored (see that function's own docstring). Not closed after: on success it's already
+    # handed to the write cache, which now owns its lifecycle.
+    excel_io.save_workbook_preserving_formula_cache(opened, storage_path)
 
     workbook = Workbook(
         id=workbook_id,
