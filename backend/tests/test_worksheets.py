@@ -1,4 +1,7 @@
+import io
+
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 
 def _upload_sample(api_client: TestClient, headers: dict, sample_xlsx_bytes: bytes) -> dict:
@@ -42,6 +45,85 @@ def test_read_worksheet_preserves_formatting_and_formulas(
     assert formula_cell["calculated_value"] is None
 
     assert "A5:B5" in data["merged_cells"]
+
+
+def test_read_worksheet_strips_xlfn_prefix_from_formula_text(api_client: TestClient, auth_headers: dict):
+    # Regression test for a real bug found in a real production workbook: a formula stored as
+    # `_xlfn.IFERROR(...)` in the raw XML (Excel's own internal compatibility marker, stripped
+    # by Excel itself before ever displaying the formula) reached Univer verbatim, which
+    # doesn't recognize `_xlfn.IFERROR` as a function name and returned #NAME? for a formula
+    # that works fine in real Excel. See cell_signal.clean_formula_text's own docstring.
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = 10
+    ws["A2"] = 0
+    # openpyxl writes whatever string is assigned as a formula cell's value verbatim — this is
+    # exactly the raw XML shape a real Excel-authored file had.
+    ws["A3"] = '=+_xlfn.IFERROR(A1/A2,"")'
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    upload_response = api_client.post(
+        "/workbooks",
+        headers=auth_headers,
+        files={
+            "file": (
+                "xlfn_sample.xlsx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert upload_response.status_code == 201
+    workbook_id = upload_response.json()["id"]
+    worksheet_id = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()["worksheets"][0]["id"]
+
+    response = api_client.get(f"/workbooks/{workbook_id}/worksheets/{worksheet_id}", headers=auth_headers)
+    assert response.status_code == 200
+    formula_cell = _get_cell(response.json()["cells"], row=3, column=1)
+    assert formula_cell["formula"] == '=+IFERROR(A1/A2,"")'
+    assert "_xlfn" not in formula_cell["formula"]
+
+
+def test_read_worksheet_strips_external_workbook_reference_index(api_client: TestClient, auth_headers: dict):
+    # Regression test for a real bug found in a real production workbook (a budget document
+    # assembled from several previously-separate "Sous Programme" files): a formula kept its
+    # external-link syntax ('[3]Sheet!Cell') even though a sheet of that same name was copied
+    # in locally, so Univer saw a reference to an unreachable external file and returned
+    # #NAME?. Sets up the same shape here: a workbook with a real local sheet named "Sous
+    # Programme 1" plus a formula on another sheet that references it via a bracketed index —
+    # exactly what openpyxl reports for a genuine external reference — and confirms the index
+    # is stripped so it resolves as an ordinary local cross-sheet reference instead.
+    wb = Workbook()
+    ws_main = wb.active
+    ws_main.title = "Data"
+    ws_main["A1"] = "='[3]Sous Programme 1'!N15"
+    wb.create_sheet("Sous Programme 1")
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    upload_response = api_client.post(
+        "/workbooks",
+        headers=auth_headers,
+        files={
+            "file": (
+                "external_ref_sample.xlsx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert upload_response.status_code == 201
+    workbook_id = upload_response.json()["id"]
+    worksheets = api_client.get(f"/workbooks/{workbook_id}", headers=auth_headers).json()["worksheets"]
+    data_worksheet_id = next(w["id"] for w in worksheets if w["name"] == "Data")
+
+    response = api_client.get(f"/workbooks/{workbook_id}/worksheets/{data_worksheet_id}", headers=auth_headers)
+    assert response.status_code == 200
+    formula_cell = _get_cell(response.json()["cells"], row=1, column=1)
+    assert formula_cell["formula"] == "='Sous Programme 1'!N15"
+    assert "[3]" not in formula_cell["formula"]
 
 
 def test_edit_worksheet_preserves_untouched_formatting(

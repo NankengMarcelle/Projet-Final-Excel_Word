@@ -12,7 +12,7 @@ from docx.shared import Cm, Emu, Inches, Pt, RGBColor
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet as OpenpyxlWorksheet
 
-from app.spreadsheet.cell_signal import color_to_hex, used_range
+from app.spreadsheet.cell_signal import clean_formula_text, color_to_hex, used_range
 
 
 def _docx_rgb(color) -> str | None:
@@ -215,7 +215,7 @@ def _cell_display_value(cell, formula_cell=None, override_value=None) -> str:
         # showing that (as Excel's own "show formulas" mode would) beats a silently blank
         # cell, even though it's the formula, not the number it would have evaluated to.
         if formula_cell is not None and formula_cell.data_type == "f":
-            return str(formula_cell.value)
+            return clean_formula_text(str(formula_cell.value))
         return ""
     if isinstance(value, (datetime, date)):
         # openpyxl hands back a real datetime/date object for a date-formatted cell (when

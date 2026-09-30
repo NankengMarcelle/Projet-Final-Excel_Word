@@ -12,7 +12,7 @@ from app.models.worksheet import Worksheet
 from app.repositories import sheet_relationship_repository, worksheet_repository
 from app.schemas.worksheet import CellData, WorksheetColumn, WorksheetData, WorksheetMetadataUpdate
 from app.spreadsheet import cell_editor, excel_io, filter_engine, worksheet_metadata
-from app.spreadsheet.cell_signal import cell_has_signal, color_to_hex, used_range
+from app.spreadsheet.cell_signal import cell_has_signal, clean_formula_text, color_to_hex, used_range
 
 
 def get_worksheet_or_404(db: Session, *, workbook_id: uuid.UUID, worksheet_id: str) -> Worksheet:
@@ -72,7 +72,7 @@ def read_worksheet_data(*, workbook: Workbook, worksheet: Worksheet) -> Workshee
                     row=cell.row,
                     column=cell.column,
                     value=None if is_formula else cell.value,
-                    formula=cell.value if is_formula else None,
+                    formula=clean_formula_text(cell.value) if is_formula else None,
                     calculated_value=calculated_value,
                     number_format=cell.number_format,
                     bold=bool(cell.font.bold),

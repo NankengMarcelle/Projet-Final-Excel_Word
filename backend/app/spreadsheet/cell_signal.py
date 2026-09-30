@@ -7,6 +7,8 @@ instead of its declared dimensions — see used_range()'s own docstring for why 
 distinction matters a lot in practice).
 """
 
+import re
+
 
 def color_to_hex(color) -> str | None:
     rgb = getattr(color, "rgb", None)
@@ -53,6 +55,51 @@ def cell_has_signal(cell) -> bool:
     ):
         return True
     return False
+
+
+# Matches an external-workbook reference index like the "[3]" in `'[3]Sous Programme 1'!N15`
+# — Excel's own shorthand for "sheet in some other workbook, looked up by index in this file's
+# own externalLinks table" (see clean_formula_text's own docstring). Digits only: in ordinary
+# A1-style formulas (what this app and Univer both use — R1C1-style "R[1]C[1]" is a different,
+# unrelated notation this codebase never produces or expects), a bracket holding nothing but
+# digits has no other meaning, so this is safe to strip unconditionally.
+_EXTERNAL_WORKBOOK_REF_PATTERN = re.compile(r"\[\d+\]")
+
+
+def clean_formula_text(formula: str) -> str:
+    """Cleans up formula text before it's shown to a user or handed to Univer for live
+    evaluation, undoing two things Excel's own display layer already hides from a person
+    looking at the formula bar, but which openpyxl (and therefore Univer, which only ever
+    sees whatever openpyxl reports) has no special handling for:
+
+    1. Excel's internal `_xlfn.` prefix, written onto certain function names (IFERROR among
+       them, depending on the Excel version that saved the file) as a forward-compatibility
+       marker in the underlying XML. Confirmed live against a real workbook: Univer treated
+       `_xlfn.IFERROR` as an unrecognized function name and returned #NAME? for a formula
+       (`=+IFERROR(L8/$L$137,"")`) that evaluates fine in real Excel and fine in Univer once
+       the prefix is gone — same cell, only that string differed.
+
+    2. An external-workbook reference index — `'[3]Sous Programme 1'!N15` means "the sheet
+       'Sous Programme 1' in some *other* workbook, tracked by index 3 in this file's own
+       externalLinks table," not a sheet inside this workbook, even though the name may be
+       identical to one that also exists locally. This shows up when a workbook was built by
+       merging several previously-separate files into one (confirmed live: this exact pattern,
+       for a real institutional budget workbook assembled from several "Sous Programme" files)
+       — a formula written while those were still separate files keeps its external-link syntax
+       even after the sheet it points to was copied in locally under the same name. Real Excel
+       resolves the bracketed index to a display-only file path and, critically, still can't
+       actually reach that external file either — what it shows is just the formula's last
+       *cached* result, the same fallback any formula gets when its live inputs aren't
+       available, not a real recomputation. Stripping the bracket here lets the reference fall
+       through to a genuine local cross-sheet lookup instead, which Univer *can* resolve for
+       real, against the actual local sheet of the same name — a deliberate, disclosed
+       heuristic (not a guarantee): correct whenever the local sheet's data still matches what
+       the original external file held, which is the expected case for a workbook assembled
+       this way, but not a logical certainty in every possible workbook.
+
+    Both are blanket replacements, not just leading-prefix strips, since either pattern can
+    appear nested anywhere inside a larger expression, not only at the very start."""
+    return _EXTERNAL_WORKBOOK_REF_PATTERN.sub("", formula.replace("_xlfn.", ""))
 
 
 def used_range(ws) -> tuple[int, int]:
