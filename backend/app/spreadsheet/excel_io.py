@@ -6,7 +6,19 @@ import uuid
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
-from xml.etree import ElementTree as ET
+
+# lxml, not the stdlib xml.etree.ElementTree: a real workbook's sheet XML routinely carries
+# attributes in a second namespace (most commonly r:id on <hyperlink> — confirmed live) that
+# stdlib ElementTree has no memory of once parsed. Round-tripping such a sheet through
+# ElementTree's fromstring/tostring silently renames r:id to an auto-generated ns0:id on
+# every save — still well-formed XML, but enough of a departure from what Excel's own writer
+# produces that Excel refused to open a real downloaded file afterward ("the content ... is
+# damaged"). lxml tracks each namespace's original prefix from the parse and reuses it on
+# tostring(), so a sheet with no formula-cache patching needed round-trips byte-for-byte, and
+# a sheet that does need patching keeps every prefix and self-closing-tag convention the
+# original writer (openpyxl) used, changing only the specific <v> text this module means to
+# change.
+from lxml import etree as ET
 
 from openpyxl import Workbook as OpenpyxlWorkbook
 from openpyxl import load_workbook as openpyxl_load_workbook
@@ -154,7 +166,10 @@ def save_workbook(workbook: OpenpyxlWorkbook, path: Path) -> None:
 
 _XML_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XML_NS_RELS_DOC = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-ET.register_namespace("", _XML_NS_MAIN)
+# No register_namespace() call here (unlike the old stdlib-ElementTree version of this module):
+# lxml has no notion of globally registering the *default* (unprefixed) namespace — it picks
+# up each element's namespace from the tree it's parsed from or attached to, which is exactly
+# what a brand-new <v> SubElement created below inherits from its parent <c> automatically.
 
 
 def save_workbook_preserving_formula_cache(
@@ -427,7 +442,11 @@ def _patch_sheet_xml(raw: bytes, coord_values: dict[str, object]) -> bytes | Non
             changed = True
     if not changed:
         return None
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    # No xml_declaration: openpyxl's own writer omits it on every part it saves (confirmed
+    # live against this exact file) — adding one back here would be a gratuitous departure
+    # from the byte-for-byte-round-trip goal this rewrite exists for, even though a
+    # declaration's presence or absence is separately valid XML either way.
+    return ET.tostring(root, encoding="UTF-8")
 
 
 # --- Read-path cache -------------------------------------------------------

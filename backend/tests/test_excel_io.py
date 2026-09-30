@@ -1,4 +1,5 @@
 import threading
+import zipfile
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -70,6 +71,45 @@ def test_does_not_reapply_a_stale_value_to_the_cell_that_was_actually_edited(tmp
     # No formula engine recomputed this, and the stale "10" (for the *old* formula) was
     # correctly withheld — None, not a wrong number, is the honest result here.
     assert values["Sheet2"]["A1"].value is None
+
+
+def test_reinjection_preserves_a_hyperlinks_relationship_id_namespace_prefix(tmp_path):
+    # Regression test for a real, serious bug: Excel refused to open a real downloaded file
+    # after an edit, reporting its content as damaged. Root cause was _patch_sheet_xml (via
+    # _reinject_formula_cache) round-tripping the whole sheet through the stdlib
+    # xml.etree.ElementTree, which has no memory of a parsed document's original namespace
+    # prefixes — any attribute in a second namespace (confirmed live: r:id on <hyperlink>,
+    # extremely common in real workbooks) came back renamed to an auto-generated ns0:id on
+    # every single save. Still well-formed XML, but enough of a departure from what Excel's
+    # own writer produces that Excel's own parser rejected it. Switched to lxml, which does
+    # track and reuse each namespace's original prefix.
+    path = tmp_path / "wb.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = 5
+    ws["A2"] = 10
+    ws["A3"] = "=A1+A2"
+    ws["B1"] = "Link"
+    ws["B1"].hyperlink = "https://example.com"
+    wb.save(path)
+    wb.close()
+    _seed_cached_formula_value(path, "Sheet1", "A3", 15)
+
+    reloaded = load_workbook(path, data_only=False)
+    reloaded["Sheet1"]["A1"] = 99  # an edit unrelated to both the hyperlink and A3's formula
+    excel_io.save_workbook_preserving_formula_cache(reloaded, path, exclude=set())
+    reloaded.close()
+
+    with zipfile.ZipFile(path) as archive:
+        sheet_xml = archive.read("xl/worksheets/sheet1.xml")
+    assert b'r:id="rId1"' in sheet_xml
+    assert b"ns0:" not in sheet_xml and b"ns1:" not in sheet_xml
+
+    result = load_workbook(path)
+    assert result["Sheet1"]["B1"].hyperlink.target == "https://example.com"
+    values = load_workbook(path, data_only=True)
+    assert values["Sheet1"]["A3"].value == 15
 
 
 def test_save_survives_a_formula_cache_reinjection_failure(tmp_path, monkeypatch):
