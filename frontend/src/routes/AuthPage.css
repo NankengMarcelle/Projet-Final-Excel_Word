@@ -7,12 +7,17 @@
 @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 .auth-page {
-  flex: 1;
-  min-height: 100svh;
+  /* flex-basis: auto (not the flex:1 shorthand's 0%) so the explicit height below is what
+     #root's column flex layout actually sizes this to, instead of being ignored in favor of
+     content-driven growth — confirmed live: with flex-basis 0% this grew past 100svh on any
+     viewport short enough for the card's natural height to exceed it, defeating the height
+     cap entirely and causing a page-level scrollbar. */
+  flex: 1 1 auto;
+  height: 100svh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 16px;
+  padding: clamp(10px, 3svh, 32px) 16px;
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
@@ -62,7 +67,7 @@
   background: transparent;
   color: #6b7280;
   font-weight: 800;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   cursor: pointer;
   font-family: inherit;
 }
@@ -76,12 +81,14 @@
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 440px;
+  max-width: 390px;
+  max-height: 100%;
+  overflow-y: auto;
   background: #fff;
   border-radius: 24px;
   border: 1px solid #e7e9f2;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.09);
-  padding: 2.5rem;
+  padding: clamp(1rem, 3svh, 2.5rem);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -90,27 +97,27 @@
 }
 
 .auth-logo {
-  width: 84px;
-  height: 84px;
+  width: clamp(44px, 7svh, 84px);
+  height: clamp(44px, 7svh, 84px);
   border-radius: 50%;
   background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 8px 20px rgba(2, 0, 108, 0.12);
-  margin-bottom: 1rem;
+  margin-bottom: clamp(0.4rem, 1.5svh, 1rem);
   border: 2px solid #eef0f8;
   flex-shrink: 0;
 }
 
 .auth-logo img {
-  width: 62px;
-  height: 62px;
+  width: 74%;
+  height: 74%;
   object-fit: contain;
 }
 
 .auth-card h1 {
-  font-size: 1.45rem;
+  font-size: 1.2rem;
   font-weight: 800;
   text-align: center;
   letter-spacing: -0.01em;
@@ -119,21 +126,21 @@
 }
 
 .auth-subtitle {
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   color: #6b7280;
   text-align: center;
-  margin: 4px 0 1.5rem;
+  margin: 4px 0 clamp(0.5rem, 2svh, 1.5rem);
 }
 
 .auth-form {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
+  gap: clamp(0.45rem, 1.75svh, 1.15rem);
 }
 
 .auth-field-group label {
-  font-size: 0.775rem;
+  font-size: 0.7rem;
   font-weight: 700;
   color: #374151;
   display: block;
@@ -163,7 +170,7 @@
   border: 1px solid #dde1ec;
   background: #fff;
   color: #0f172a;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 600;
   font-family: inherit;
   outline: none;
@@ -208,7 +215,7 @@
 
 .auth-field-error {
   margin: 6px 0 0;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   color: #dc2626;
   font-weight: 600;
 }
@@ -217,7 +224,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   margin-top: -0.3rem;
 }
 
@@ -249,7 +256,7 @@
 
 .auth-alert {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: #991b1b;
   background: #fef2f2;
@@ -260,7 +267,7 @@
 
 .auth-alert-success {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: #065f46;
   background: #ecfdf5;
@@ -278,7 +285,7 @@
   background: #02006c;
   color: #fff;
   font-weight: 800;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-family: inherit;
   cursor: pointer;
   box-shadow: 0 10px 24px rgba(2, 0, 108, 0.22);
@@ -297,8 +304,8 @@
 }
 
 .auth-switch {
-  margin-top: 1.25rem;
+  margin-top: clamp(0.4rem, 2svh, 1.25rem);
   text-align: center;
-  font-size: 0.825rem;
+  font-size: 0.75rem;
   color: #6b7280;
 }
